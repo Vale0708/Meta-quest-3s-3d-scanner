@@ -490,6 +490,7 @@ export class ScanApp {
     } else if (this.page === 'more') {
       title = 'Mehr';
       lines.push(...this._statusLines());
+      if (this.diagLines) lines.push(...this.diagLines());
       if (this.mode.id === 'room') lines.push(`Quest-Raum: ${this.sceneMeshes.size} Meshes, ${this.planes.size} Flächen`);
       b.push({ id: 'preview', label: this.preview ? 'Vorschau: an' : 'Vorschau: aus', active: this.preview });
       if (this.colorCam) b.push({ id: 'colorcal', label: this.colorCal ? 'Ausrichten fertig' : 'Farbe ausrichten', active: this.colorCal });
