@@ -3,7 +3,7 @@
 import * as THREE from 'three';
 import { FusionClient } from '../fusion/client.js';
 import { Panel, makeLabel } from './panel.js';
-import { evaluateMeasurement, describeMeasurement, pivotCalibration } from '../measure.js';
+import { evaluateMeasurement, describeMeasurement, robustPivotCalibration } from '../measure.js';
 import { saveModel } from './color-camera.js';
 
 // Projects the live camera image onto the preview (to align the color camera).
@@ -27,6 +27,34 @@ void main() {
 
 const TOOLS = ['none', 'point', 'distance', 'circle', 'plane'];
 const TOOL_NAMES = { none: 'Aus', point: 'Punkt', distance: 'Abstand', circle: 'Kreis/Ø', plane: 'Ebene', calibrate: 'Kalibrieren' };
+const TOOL_HINTS = {
+  point: 'Spitze auf den Punkt, Trigger drücken',
+  distance: 'Trigger auf Punkt 1, dann auf Punkt 2',
+  circle: '3–6 Punkte rund um die Stange, dann „Fertig“',
+  plane: '3+ Punkte auf der Fläche verteilt, dann „Fertig“',
+};
+
+// Help line while the ray points at a button
+const HELP = {
+  start: 'Startet/pausiert das Erfassen der Tiefenbilder (auch Taste A)',
+  preview: 'Blendet das erfasste Modell über der echten Welt ein/aus',
+  box: 'Box neu platzieren: Spitze auf den Tisch, Trigger',
+  measure: 'Abstände, Durchmesser und Ebenen mit der Spitze antasten',
+  more: 'Vorschau, Farbe, Quest-Raumerfassung, Scan löschen, Abbrechen',
+  finish: 'Berechnet das endgültige Modell und öffnet den Export',
+  back: 'Zurück zum Hauptmenü',
+  't-point': 'Einzelnen Punkt antasten',
+  't-distance': 'Abstand zwischen zwei Punkten (live-Anzeige)',
+  't-circle': 'Durchmesser + Achse, z. B. Kleiderstange',
+  't-plane': 'Ebene + Ebenheit, z. B. Wand oder Tischplatte',
+  mdone: 'Schließt Kreis/Ebene mit den bisherigen Punkten ab',
+  undo: 'Letzten Punkt bzw. letzte Messung löschen (auch Taste B)',
+  calib: 'Lernt, wo genau die Messspitze am Controller sitzt (einmalig)',
+  colorcal: 'Kamerabild an der echten Welt ausrichten (für Farbe)',
+  room: 'Startet die Raumerfassung der Quest selbst – optional, liefert ein grobes Zusatz-Raster',
+  reset: 'Verwirft alles bisher Gescannte (Messungen bleiben)',
+  exit: 'Beendet ohne zu speichern',
+};
 
 export class ScanApp {
   /**
@@ -48,6 +76,8 @@ export class ScanApp {
     this.colorCal = false;
     this.phase = this.mode.box ? 'place' : 'ready';
     this.tool = 'none';
+    this.page = 'main';  // main | measure | calib | more
+    this.calibLive = null; // live result while calibrating
     this.preview = true;
     this.message = '';
     this.points = [];          // points of the current measurement
@@ -253,11 +283,6 @@ export class ScanApp {
     this.message = '';
   }
 
-  cycleTool() {
-    const i = TOOLS.indexOf(this.tool);
-    this.setTool(TOOLS[(i + 1) % TOOLS.length]);
-  }
-
   // Trigger in the room (not on the panel)
   trigger() {
     if (this.phase === 'place') { this.confirmBox(); return; }
@@ -294,16 +319,20 @@ export class ScanApp {
   calibrationSample(matrix) {
     if (this.tool !== 'calibrate') return;
     this.calibPoses.push({ m: Array.from(matrix.elements) });
+    if (this.calibPoses.length % 15 === 0) this.calibLive = robustPivotCalibration(this.calibPoses);
   }
 
   calibrationEnd() {
-    if (this.tool !== 'calibrate') return null;
-    const r = pivotCalibration(this.calibPoses);
+    if (this.tool !== 'calibrate' || !this.calibPoses.length) return null;
+    const r = robustPivotCalibration(this.calibPoses);
     this.calibPoses = [];
-    if (!r) { this.message = '!Zu wenige Daten – Trigger länger halten und kippen'; return null; }
-    if (r.rms > 0.004) { this.message = `!Ungenau (±${(r.rms * 1000).toFixed(1)} mm) – nochmal`; return null; }
-    this.message = `Spitze kalibriert (±${(r.rms * 1000).toFixed(1)} mm)`;
-    this.tool = 'point';
+    this.calibLive = null;
+    if (!r) { this.message = '!Zu kurz – Trigger länger gedrückt halten'; return null; }
+    if (r.coverage < 0.6) { this.message = `!Zu wenig gekippt (${Math.round(r.coverage * 100)} %) – stärker in alle Richtungen kippen`; return null; }
+    if (r.rms > 0.003) { this.message = `!Ungenau (±${(r.rms * 1000).toFixed(1)} mm) – Spitze ist verrutscht, nochmal`; return null; }
+    this.message = `Spitze kalibriert (±${(r.rms * 1000).toFixed(1)} mm, ${r.used}/${r.total} Messungen)`;
+    this.tool = 'none';
+    this.page = 'measure';
     return r.tip;
   }
 
@@ -376,62 +405,119 @@ export class ScanApp {
   // ---------------------------------------------------------------- UI
 
   onButton(id) {
+    if (id.startsWith('t-')) { this.setTool(id.slice(2)); return; }
     switch (id) {
       case 'start': this.startPause(); break;
       case 'preview': this.preview = !this.preview; break;
       case 'box': this.phase === 'place' ? this.confirmBox() : this.replaceBox(); break;
-      case 'tool': this.cycleTool(); break;
+      case 'measure': this.page = 'measure'; if (this.tool === 'none') this.setTool('distance'); break;
+      case 'more': this.page = 'more'; break;
+      case 'back': this.page = 'main'; if (this.tool === 'calibrate') this.setTool('none'); break;
       case 'mdone': this.finishMeasurement(); break;
       case 'undo': this.undo(); break;
       case 'colorcal': this.toggleColorCal(); break;
-      case 'calib': this.setTool(this.tool === 'calibrate' ? 'none' : 'calibrate'); break;
+      case 'calib': this.page = 'calib'; this.setTool('calibrate'); break;
+      case 'calibback': this.setTool('none'); this.page = 'measure'; break;
       case 'room': this.caps.roomCapture?.().catch((e) => { this.message = '!' + e.message; }); break;
-      case 'reset': this.reset(); break;
+      case 'reset': this.reset(); this.page = 'main'; break;
       case 'finish': this.finish().then(() => this.onExit()); break;
       case 'exit': this.onExit(); break;
     }
   }
 
-  panelContent() {
+  // Y on the left controller: next measuring tool (opens the measure page)
+  cycleTool() {
+    const i = TOOLS.indexOf(this.tool);
+    this.setTool(TOOLS[(i + 1) % TOOLS.length]);
+    this.page = this.tool === 'none' ? 'main' : 'measure';
+  }
+
+  // What to do next (step guidance at the top of the panel)
+  _step() {
+    const box = !!this.box;
+    if (this.phase === 'saving') return 'Speichere … bitte warten';
+    if (this.phase === 'place') return 'Schritt 1/3: Rote Spitze auf die Tischplatte neben das Objekt halten, Trigger drücken';
+    if (this.phase === 'ready') return `Schritt ${box ? 2 : 1}/${box ? 3 : 2}: A drücken (oder ▶ Scannen) und langsam umhergehen`;
+    if (this.phase === 'paused') return 'Pausiert – A zum Weiterscannen, oder ✔ Fertig';
+    if (this.fusion.stats.blocks === 0) return 'Scannt … Kopf langsam bewegen';
+    return box ? 'Schritt 2/3: Langsam ums Objekt gehen, auch von oben – dann ✔ Fertig'
+      : 'Schritt 1/2: Langsam Wände, Boden, Decke abschauen – dann ✔ Fertig';
+  }
+
+  _statusLines() {
     const st = this.fusion.stats;
     const lines = [];
-    const phaseText = { place: 'Box platzieren', ready: 'Bereit', scanning: 'Scannt …', paused: 'Pausiert', saving: 'Speichert …' }[this.phase];
-    lines.push(`${phaseText} · ${this.frameCount} Tiefenbilder · ${st.blocks} Blöcke`);
-    if (this.perf) {
-      const p = this.perf;
-      const fps = `${Math.round(p.fps)}/${p.target} FPS`;
-      lines.push(p.level ? `!${fps} – gedrosselt (Stufe ${p.level}), langsamer bewegen` : fps);
-    }
-    if (!this.depthOk || performance.now() - this.lastDepthAt > 2000) lines.push('!Keine Tiefendaten (Depth API) – siehe Hilfe');
-    else if (this.fusion.calibrating && this.phase === 'scanning') lines.push('!Kalibriere Tiefenbild: Kopf hoch/runter + links/rechts');
-    if (this.phase === 'place') lines.push('Spitze auf Tisch → Trigger = Box absetzen');
-    else if (this.box) lines.push('Grip = Box schieben · Stick = Größe/Drehen');
-    if (this.tool === 'calibrate') lines.push('Spitze auf festen Punkt, Trigger halten, kippen');
-    else if (this.tool !== 'none') lines.push(`Messen: ${TOOL_NAMES[this.tool]} – Trigger setzt Punkt (${this.points.length})`);
-    if (this.mode.id === 'room') lines.push(`Quest-Raum: ${this.sceneMeshes.size} Meshes, ${this.planes.size} Flächen`);
-    if (this.colorCam) {
-      const cm = this.colorCam.model;
-      if (this.colorCal) lines.push(`Ausrichten: Stick = Drehen/Kippen, linker Stick = FOV (${cm.hfov.toFixed(1)}°)`);
-      else if (!this.colorCam.frames && this.colorCam.grabs > 5) lines.push('!Kamera liefert keine Bilder');
-      else lines.push(`Farbe: ${this.colorCam.grabs} Kamerabilder`);
-    }
-    if (this.message) lines.push(this.message);
+    const fps = this.perf ? ` · ${Math.round(this.perf.fps)}/${this.perf.target} FPS` : '';
+    lines.push(`${this.frameCount} Tiefenbilder · ${st.blocks} Blöcke${fps}`);
+    if (this.perf?.level) lines.push(`!Gedrosselt (Stufe ${this.perf.level}) – langsamer bewegen`);
+    if (!this.depthOk || performance.now() - this.lastDepthAt > 2000) lines.push('!Keine Tiefendaten (Depth API) – nur Messen/Quest-Raum möglich');
+    else if (this.fusion.calibrating && this.phase === 'scanning') lines.push('!Richte Tiefenbild aus: Kopf hoch/runter + links/rechts');
+    return lines;
+  }
 
+  panelContent() {
+    const st = this.fusion.stats;
+    const hover = this.panel?.hover;
+    const lines = [];
     const b = [];
     const scanning = this.phase === 'scanning';
-    b.push({ id: 'start', label: scanning ? '⏸ Pause (A)' : '▶ Scannen (A)', active: scanning, disabled: this.phase === 'saving' });
-    b.push({ id: 'preview', label: this.preview ? 'Vorschau: an' : 'Vorschau: aus' });
-    if (this.box) b.push({ id: 'box', label: this.phase === 'place' ? 'Box absetzen' : 'Box neu setzen', active: this.phase === 'place' });
-    if (this.caps.roomCapture && this.mode.id === 'room') b.push({ id: 'room', label: 'Raum-Setup' });
-    b.push({ id: 'tool', label: `Messen: ${TOOL_NAMES[this.tool]}`, active: this.tool !== 'none' && this.tool !== 'calibrate' });
-    b.push({ id: 'mdone', label: 'Messung fertig', disabled: !(this.tool === 'circle' || this.tool === 'plane') });
-    b.push({ id: 'undo', label: 'Rückgängig (B)' });
-    b.push({ id: 'calib', label: 'Spitze kalibrieren', active: this.tool === 'calibrate' });
-    if (this.colorCam) b.push({ id: 'colorcal', label: this.colorCal ? 'Ausrichten fertig' : 'Farbe ausrichten', active: this.colorCal });
-    b.push({ id: 'reset', label: 'Scan löschen', danger: true });
-    b.push({ id: 'exit', label: 'Abbrechen', danger: true });
-    b.push({ id: 'finish', label: '✔ Fertig & Speichern', wide: true, disabled: this.phase === 'saving' || (st.blocks === 0 && !this.measurements.length && !this.sceneMeshes.size) });
-    return { title: this.mode.name, lines, buttons: b };
+    const busy = this.phase === 'saving';
+    let title = this.mode.name;
+
+    if (this.page === 'measure') {
+      title = 'Messen';
+      lines.push(this.tool !== 'none' && TOOL_HINTS[this.tool] ? `${TOOL_NAMES[this.tool]}: ${TOOL_HINTS[this.tool]}` : 'Werkzeug wählen');
+      lines.push(`Punkte: ${this.points.length} · Messungen: ${this.measurements.length}`);
+      for (const t of ['point', 'distance', 'circle', 'plane']) b.push({ id: 't-' + t, label: TOOL_NAMES[t], active: this.tool === t });
+      b.push({ id: 'mdone', label: 'Fertig (Kreis/Ebene)', disabled: !(this.tool === 'circle' || this.tool === 'plane') || this.points.length < 3 });
+      b.push({ id: 'undo', label: 'Rückgängig (B)' });
+      b.push({ id: 'calib', label: 'Spitze kalibrieren', wide: true });
+      b.push({ id: 'back', label: '← Zurück', wide: true });
+    } else if (this.page === 'calib') {
+      title = 'Spitze kalibrieren';
+      lines.push('1. Spitze in eine kleine Mulde/Ecke drücken (darf nicht rutschen)');
+      lines.push('2. Trigger GEDRÜCKT halten und Controller in alle Richtungen kippen');
+      lines.push('3. Loslassen, wenn der Balken voll ist');
+      const r = this.calibLive;
+      const n = this.calibPoses.length;
+      if (n) {
+        const cov = r ? r.coverage : 0;
+        const bar = '█'.repeat(Math.round(cov * 10)) + '░'.repeat(10 - Math.round(cov * 10));
+        lines.push(`Kippen ${bar} ${Math.round(cov * 100)} %`);
+        if (r) lines.push(`${r.rms <= 0.003 ? '' : '!'}Genauigkeit ±${(r.rms * 1000).toFixed(1)} mm (${r.used}/${r.total} Messungen)`);
+      }
+      b.push({ id: 'calibback', label: '← Abbrechen', wide: true });
+    } else if (this.page === 'more') {
+      title = 'Mehr';
+      lines.push(...this._statusLines());
+      if (this.mode.id === 'room') lines.push(`Quest-Raum: ${this.sceneMeshes.size} Meshes, ${this.planes.size} Flächen`);
+      b.push({ id: 'preview', label: this.preview ? 'Vorschau: an' : 'Vorschau: aus', active: this.preview });
+      if (this.colorCam) b.push({ id: 'colorcal', label: this.colorCal ? 'Ausrichten fertig' : 'Farbe ausrichten', active: this.colorCal });
+      if (this.caps.roomCapture && this.mode.id === 'room') b.push({ id: 'room', label: 'Quest-Raumerfassung (optional)', wide: true });
+      b.push({ id: 'reset', label: 'Scan löschen', danger: true });
+      b.push({ id: 'exit', label: 'Abbrechen', danger: true });
+      b.push({ id: 'back', label: '← Zurück', wide: true });
+    } else {
+      lines.push(this._step());
+      lines.push(...this._statusLines());
+      if (this.colorCam) {
+        const cm = this.colorCam.model;
+        if (this.colorCal) lines.push(`Farbe ausrichten: rechter Stick = drehen/kippen, linker = FOV (${cm.hfov.toFixed(1)}°)`);
+        else if (!this.colorCam.frames && this.colorCam.grabs > 5) lines.push('!Kamera liefert keine Bilder');
+      }
+      if (this.phase === 'place') b.push({ id: 'box', label: 'Box hier absetzen', active: true, wide: true });
+      else {
+        b.push({ id: 'start', label: scanning ? '⏸ Pause (A)' : '▶ Scannen (A)', active: scanning, disabled: busy });
+        if (this.box) b.push({ id: 'box', label: 'Box neu setzen', disabled: scanning || busy });
+      }
+      b.push({ id: 'measure', label: 'Messen …' });
+      b.push({ id: 'more', label: 'Mehr …' });
+      b.push({ id: 'finish', label: '✔ Fertig & Speichern', wide: true, disabled: busy || (st.blocks === 0 && !this.measurements.length && !this.sceneMeshes.size) });
+    }
+    if (this.message && this.page !== 'calib') lines.push(this.message);
+    else if (this.message && this.page === 'calib' && !this.calibPoses.length) lines.push(this.message);
+    if (hover && HELP[hover]) lines.push('ⓘ ' + HELP[hover]);
+    return { title, lines, buttons: b };
   }
 
   // ------------------------------------------------------- visuals

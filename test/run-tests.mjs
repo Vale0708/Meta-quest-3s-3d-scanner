@@ -5,7 +5,7 @@ import * as ops from '../js/mesh/ops.js';
 import { toBinarySTL, parseBinarySTL } from '../js/export/stl.js';
 import { toSTEP } from '../js/export/step.js';
 import { toOBJ } from '../js/export/obj.js';
-import { fitCircle, fitPlane, pivotCalibration } from '../js/measure.js';
+import { fitCircle, fitPlane, pivotCalibration, robustPivotCalibration } from '../js/measure.js';
 import { cylinder } from '../js/mesh/primitives.js';
 import { perspective, lookAt, renderDepth, renderColor, mulberry32 } from '../js/sim/synth.js';
 import { toPLY } from '../js/export/ply.js';
@@ -163,6 +163,19 @@ mkdirSync(outDir, { recursive: true });
     const t = [q[0] - Rt[0] + (rnd() - 0.5) * 0.001, q[1] - Rt[1] + (rnd() - 0.5) * 0.001, q[2] - Rt[2] + (rnd() - 0.5) * 0.001];
     poses.push({ m: [R[0][0], R[1][0], R[2][0], 0, R[0][1], R[1][1], R[2][1], 0, R[0][2], R[1][2], R[2][2], 0, t[0], t[1], t[2], 1] });
   }
+  // slipping: 15 % of the poses with the tip 1–3 cm away from the pivot
+  const slipped = poses.map((p, i) => {
+    if (i % 7 !== 3) return p;
+    const m = p.m.slice();
+    m[12] += 0.01 + rnd() * 0.02; m[14] -= 0.01 + rnd() * 0.02;
+    return { m };
+  });
+  const naive = pivotCalibration(slipped);
+  const robust = robustPivotCalibration(slipped);
+  const errN = Math.hypot(naive.tip[0] - tip[0], naive.tip[1] - tip[1], naive.tip[2] - tip[2]);
+  const errR = Math.hypot(robust.tip[0] - tip[0], robust.tip[1] - tip[1], robust.tip[2] - tip[2]);
+  check('Kalibrierung trotz Verrutschen', errR < 0.002 && robust.used < slipped.length && robust.coverage > 0.5,
+    `ohne Ausreißerfilter ${(errN * 1000).toFixed(1)} mm, mit ${(errR * 1000).toFixed(2)} mm (${robust.used}/${robust.total} Posen, Abdeckung ${Math.round(robust.coverage * 100)} %)`);
   const pc = pivotCalibration(poses);
   const err = Math.hypot(pc.tip[0] - tip[0], pc.tip[1] - tip[1], pc.tip[2] - tip[2]);
   check('Spitzen-Kalibrierung', err < 0.002, `Fehler ${(err * 1000).toFixed(2)} mm, rms ${(pc.rms * 1000).toFixed(2)} mm`);

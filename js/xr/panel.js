@@ -36,10 +36,24 @@ export class Panel {
   update() {
     if (!this.dirty) return;
     this.dirty = false;
-    const { title, lines = [], buttons = [] } = this.content;
+    const { title, lines: rawLines = [], buttons = [] } = this.content;
     const ctx = this.ctx;
     const pad = 22, bh = 66, gap = 12;
     const lineH = 30;
+    // wrap long lines (a leading "!" = warning color carries over to the continuation)
+    ctx.font = '25px system-ui, sans-serif';
+    const lines = [];
+    for (const raw of rawLines) {
+      const warn = raw.startsWith('!');
+      const words = (warn ? raw.slice(1) : raw).split(' ');
+      let cur = '';
+      for (const w of words) {
+        const next = cur ? cur + ' ' + w : w;
+        if (cur && ctx.measureText(next).width > W - 2 * pad) { lines.push((warn ? '!' : '') + cur); cur = w; }
+        else cur = next;
+      }
+      lines.push((warn ? '!' : '') + cur);
+    }
     const rows = [];
     let row = [];
     for (const b of buttons) {
