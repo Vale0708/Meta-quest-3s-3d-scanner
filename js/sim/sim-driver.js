@@ -5,16 +5,17 @@
 import * as THREE from 'three';
 import { ScanApp } from '../xr/scan-app.js';
 import { DepthReader } from '../xr/depth-reader.js';
-import { perspective, lookAt, renderDepth, mulberry32 } from './synth.js';
+import { perspective, lookAt, renderDepth, renderColor, mulberry32 } from './synth.js';
+import { loadModel, cameraPose, projFromModel } from '../xr/color-camera.js';
 
 const SCENES = {
   small: {
     target: [0, 0.8, -0.6],
     radius: 0.45,
     objects: [
-      { type: 'plane', y: 0.75 },
-      { type: 'sphere', c: [0, 0.81, -0.6], r: 0.06 },
-      { type: 'box', min: [0.02, 0.75, -0.66], max: [0.1, 0.83, -0.56] },
+      { type: 'plane', y: 0.75, colorFn: checker([150, 110, 70], [120, 85, 50], 0.05) },
+      { type: 'sphere', c: [0, 0.81, -0.6], r: 0.06, colorFn: (p) => (p[1] > 0.83 ? [220, 40, 40] : [240, 240, 240]) },
+      { type: 'box', min: [0.02, 0.75, -0.66], max: [0.1, 0.83, -0.56], color: [40, 90, 220] },
     ],
     tip: [0, 0.75, -0.6],
   },
@@ -22,9 +23,9 @@ const SCENES = {
     target: [0, 0.5, -1.2],
     radius: 1.5,
     objects: [
-      { type: 'plane', y: 0 },
-      { type: 'box', min: [-0.4, 0, -1.5], max: [0.4, 0.75, -0.9] },
-      { type: 'sphere', c: [0, 0.95, -1.2], r: 0.2 },
+      { type: 'plane', y: 0, colorFn: checker([90, 90, 90], [60, 60, 60], 0.25) },
+      { type: 'box', min: [-0.4, 0, -1.5], max: [0.4, 0.75, -0.9], color: [180, 130, 80] },
+      { type: 'sphere', c: [0, 0.95, -1.2], r: 0.2, colorFn: (p) => (p[0] > 0 ? [230, 200, 40] : [40, 160, 80]) },
     ],
     tip: [0, 0, -1.2],
   },
@@ -32,16 +33,42 @@ const SCENES = {
     target: [0, 1.2, 0],
     radius: 0,
     objects: [
-      { type: 'plane', y: 0 }, { type: 'plane', y: 2.5 },
-      { type: 'plane', n: [1, 0, 0], d: 1.8 }, { type: 'plane', n: [1, 0, 0], d: -1.8 },
-      { type: 'plane', n: [0, 0, 1], d: 2.2 }, { type: 'plane', n: [0, 0, 1], d: -2.2 },
-      { type: 'box', min: [-1.8, 0, -2.2], max: [-0.8, 0.75, -1.5] },
-      { type: 'box', min: [1.2, 0, 0.5], max: [1.8, 2.0, 1.5] },
+      { type: 'plane', y: 0, colorFn: checker([140, 100, 60], [120, 85, 50], 0.3) }, { type: 'plane', y: 2.5, color: [245, 245, 245] },
+      { type: 'plane', n: [1, 0, 0], d: 1.8, color: [200, 220, 235] }, { type: 'plane', n: [1, 0, 0], d: -1.8, color: [235, 225, 200] },
+      { type: 'plane', n: [0, 0, 1], d: 2.2, color: [220, 235, 210] }, { type: 'plane', n: [0, 0, 1], d: -2.2, color: [235, 210, 210] },
+      { type: 'box', min: [-1.8, 0, -2.2], max: [-0.8, 0.75, -1.5], color: [90, 60, 40] },
+      { type: 'box', min: [1.2, 0, 0.5], max: [1.8, 2.0, 1.5], color: [250, 250, 250] },
       { type: 'sphere', c: [0.5, 1.8, -2.0], r: 0.02 }, // clothes rail as stand-in
     ],
     tip: [0, 0, 0],
   },
 };
+
+function checker(a, b, size) {
+  return (p) => ((Math.floor(p[0] / size) + Math.floor(p[2] / size)) & 1 ? a : b);
+}
+
+// Simulated color camera: same interface as ColorCamera (grab, model, …)
+class SimColorCamera {
+  constructor(objects) {
+    this.objects = objects;
+    this.model = loadModel();
+    this.frames = 0;
+    this.grabs = 0;
+    this.label = 'Simulation';
+    this.active = true;
+    this.aspect = 4 / 3;
+  }
+
+  grabAt(head) {
+    const camToWorld = cameraPose(head, this.model);
+    const proj = projFromModel(this.model, this.aspect);
+    const rgba = renderColor(this.objects, camToWorld, proj, 64, 48);
+    this.frames++;
+    this.grabs++;
+    return { width: 64, height: 48, rgba, proj, camToWorld };
+  }
+}
 
 function sceneVisuals(objects) {
   const g = new THREE.Group();
@@ -96,8 +123,10 @@ export function startSim(o) {
   ui.className = 'sim-ui';
   o.container.appendChild(ui);
 
+  const colorCam = o.color ? new SimColorCamera(def.objects) : null;
   const app = new ScanApp({
     scene,
+    colorCam,
     mode: o.mode,
     orientation: 'auto',
     onSave: async (rec) => { rec.stats.depth = { ...depthReader.info }; rec.name += ' (Simulation)'; await o.onSave(rec); },
@@ -154,7 +183,10 @@ export function startSim(o) {
       }, { eye: 'left' }, 'float32');
     }
     const f = depthReader.poll();
-    if (f) app.onDepthFrame(f);
+    if (f) {
+      if (colorCam && app.phase === 'scanning') f.color = colorCam.grabAt(f.camToWorld);
+      app.onDepthFrame(f);
+    }
 
     app.update(now);
     const content = app.panelContent();

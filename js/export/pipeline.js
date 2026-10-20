@@ -5,6 +5,10 @@ import { measurementGeometry } from '../mesh/primitives.js';
 import { toBinarySTL } from './stl.js';
 import { toSTEP } from './step.js';
 import { toOBJ } from './obj.js';
+import { toPLY } from './ply.js';
+
+// Colors of the parts without their own vertex colors (RGB 0…255)
+export const PART_COLORS = { 'Quest-Raum-Mesh': [150, 165, 200], 'Raumflaechen': [230, 180, 120], 'Messungen': [255, 70, 130] };
 
 export const DEFAULT_OPTIONS = {
   scan: true,
@@ -14,7 +18,8 @@ export const DEFAULT_OPTIONS = {
   smooth: 3,
   clean: true,
   align: true,
-  stepMaxTris: 30000,
+  stepMaxTris: 15000, // Fusion 360 stays responsive up to roughly this size
+  colors: true,
   cutBottom: 0, // mm above the box floor; removes table/floor remnants (object modes only)
 };
 
@@ -46,7 +51,9 @@ function clipBelow(m, z) {
     const zc = (p[idx[t] * 3 + 2] + p[idx[t + 1] * 3 + 2] + p[idx[t + 2] * 3 + 2]) / 3;
     if (zc >= z) out.push(idx[t], idx[t + 1], idx[t + 2]);
   }
-  return ops.compact({ positions: p, indices: new Uint32Array(out) });
+  const r = { positions: p, indices: new Uint32Array(out) };
+  if (m.colors) r.colors = m.colors;
+  return ops.compact(r);
 }
 
 function planeMesh(poly) {
@@ -59,6 +66,7 @@ function planeMesh(poly) {
 /** @returns {{parts: {name, mesh}[], frame: {origin, yaw}, info: object}} */
 export function buildParts(rec, opt = DEFAULT_OPTIONS) {
   let scan = rec.mesh;
+  if (!opt.colors && scan.colors) scan = { positions: scan.positions, indices: scan.indices };
   if (opt.clean && scan.indices.length) scan = ops.removeSmallComponents(scan, { minTris: 40, minFraction: 0.01 });
   if (opt.smooth > 0 && scan.indices.length) scan = ops.taubinSmooth(scan, opt.smooth);
 
@@ -98,23 +106,36 @@ function safeName(s) {
 export function exportFile(rec, format, opt = DEFAULT_OPTIONS) {
   const { parts, frame } = buildParts(rec, opt);
   const base = safeName(rec.name);
+  if (opt.colors) for (const p of parts) if (!p.mesh.colors && PART_COLORS[p.name]) p.color = PART_COLORS[p.name];
   if (format === 'csv') return { name: `${base}_Messungen.csv`, data: measurementsCSV(rec, frame), type: 'text/csv' };
   if (!parts.length) throw new Error('Nichts zu exportieren – Optionen prüfen.');
   if (format === 'stl') {
     const merged = ops.mergeMeshes(parts.map((p) => p.mesh));
     return { name: `${base}.stl`, data: toBinarySTL(merged, `Quest 3S Scanner ${base}`.slice(0, 80)), type: 'model/stl', tris: ops.triangleCount(merged) };
   }
-  if (format === 'obj') return { name: `${base}.obj`, data: toOBJ(parts), type: 'text/plain' };
+  if (format === 'obj') return { name: `${base}.obj`, data: toOBJ(parts.map(colorize)), type: 'text/plain' };
+  if (format === 'ply') {
+    const merged = ops.mergeMeshes(parts.map((p) => colorize(p).mesh));
+    return { name: `${base}.ply`, data: toPLY(merged), type: 'application/octet-stream', tris: ops.triangleCount(merged) };
+  }
   if (format === 'step') {
     const total = parts.reduce((s, p) => s + ops.triangleCount(p.mesh), 0);
     const reduced = parts.map((p) => {
       const share = Math.max(200, Math.round(opt.stepMaxTris * ops.triangleCount(p.mesh) / Math.max(1, total)));
-      return { name: p.name, mesh: ops.decimateToTarget(p.mesh, share) };
+      return { name: p.name, color: p.color, mesh: ops.decimateToTarget(p.mesh, share) };
     });
     const tris = reduced.reduce((s, p) => s + ops.triangleCount(p.mesh), 0);
     return { name: `${base}.step`, data: toSTEP(reduced, { name: base }), type: 'application/step', tris };
   }
   throw new Error('Unbekanntes Format ' + format);
+}
+
+// Part color as vertex colors, so that formats with vertex colors show it too.
+function colorize(p) {
+  if (p.mesh.colors || !p.color) return p;
+  const colors = new Uint8Array(p.mesh.positions.length);
+  for (let i = 0; i < colors.length; i += 3) colors.set(p.color, i);
+  return { ...p, mesh: { ...p.mesh, colors } };
 }
 
 export function measurementsCSV(rec, frame) {

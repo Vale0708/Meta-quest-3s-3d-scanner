@@ -74,7 +74,7 @@ function probeOrientation(f) {
 function integrate(f) {
   const t0 = performance.now();
   const depth = orient(f.depth, f.width, f.height, decided);
-  vol.integrate({ ...f, depth });
+  vol.integrate({ ...f, depth }, f.color || null);
   return performance.now() - t0;
 }
 
@@ -102,8 +102,11 @@ self.onmessage = (ev) => {
       case 'clear':
         vol.clear();
         break;
+      case 'clearColor':
+        vol.clearColor();
+        break;
       case 'frame': {
-        const f = { width: m.width, height: m.height, depth: m.depth, proj: m.proj, camToWorld: m.camToWorld };
+        const f = { width: m.width, height: m.height, depth: m.depth, proj: m.proj, camToWorld: m.camToWorld, color: m.color || null };
         if (!decided) {
           const r = probeOrientation(f);
           pending.push(f);
@@ -124,8 +127,9 @@ self.onmessage = (ev) => {
       case 'extract': {
         const t0 = performance.now();
         const mesh = extract(m.minWeight ?? 2, !!m.clean);
-        postMessage({ type: 'mesh', id: m.id, positions: mesh.positions, indices: mesh.indices, ms: performance.now() - t0 },
-          [mesh.positions.buffer, mesh.indices.buffer]);
+        const transfer = [mesh.positions.buffer, mesh.indices.buffer];
+        if (mesh.colors) transfer.push(mesh.colors.buffer);
+        postMessage({ type: 'mesh', id: m.id, positions: mesh.positions, indices: mesh.indices, colors: mesh.colors || null, ms: performance.now() - t0 }, transfer);
         break;
       }
     }

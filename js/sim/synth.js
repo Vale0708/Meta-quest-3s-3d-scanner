@@ -69,3 +69,60 @@ export function mulberry32(a) {
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
 }
+
+// Color of the first hit per pixel (RGBA, row 0 = top like a camera image).
+// Objects may carry `color: [r,g,b]` or `colorFn(point) → [r,g,b]`.
+export function renderColor(scene, camToWorld, proj, W, H, bg = [30, 30, 30]) {
+  const rgba = new Uint8Array(W * H * 4);
+  const M = camToWorld, P = proj;
+  const eye = [M[12], M[13], M[14]];
+  for (let j = 0; j < H; j++) {
+    for (let i = 0; i < W; i++) {
+      const xn = ((i + 0.5) / W) * 2 - 1, yn = 1 - ((j + 0.5) / H) * 2;
+      const cy = (yn + P[9]) / P[5], cx = (xn + P[8] - P[4] * cy) / P[0];
+      const d = [M[0] * cx + M[4] * cy - M[8], M[1] * cx + M[5] * cy - M[9], M[2] * cx + M[6] * cy - M[10]];
+      const hit = castRay(scene, eye, d);
+      let c = bg;
+      if (hit) {
+        const pt = [eye[0] + d[0] * hit.t, eye[1] + d[1] * hit.t, eye[2] + d[2] * hit.t];
+        c = hit.o.colorFn ? hit.o.colorFn(pt) : hit.o.color || [200, 200, 200];
+      }
+      const o = (j * W + i) * 4;
+      rgba[o] = c[0]; rgba[o + 1] = c[1]; rgba[o + 2] = c[2]; rgba[o + 3] = 255;
+    }
+  }
+  return rgba;
+}
+
+function castRay(scene, eye, d) {
+  let best = null;
+  for (const o of scene) {
+    const t = intersect(o, eye, d);
+    if (t < Infinity && (!best || t < best.t)) best = { t, o };
+  }
+  return best;
+}
+
+function intersect(o, eye, d) {
+  if (o.type === 'sphere') {
+    const oc = sub(eye, o.c);
+    const a = d[0] ** 2 + d[1] ** 2 + d[2] ** 2, b = 2 * (oc[0] * d[0] + oc[1] * d[1] + oc[2] * d[2]);
+    const c = oc[0] ** 2 + oc[1] ** 2 + oc[2] ** 2 - o.r * o.r;
+    const disc = b * b - 4 * a * c;
+    if (disc >= 0) { const t0 = (-b - Math.sqrt(disc)) / (2 * a); if (t0 > 0) return t0; }
+  } else if (o.type === 'plane') {
+    const n = o.n || [0, 1, 0], dist = o.n ? o.d : o.y;
+    const den = n[0] * d[0] + n[1] * d[1] + n[2] * d[2];
+    if (Math.abs(den) > 1e-9) { const t0 = (dist - (n[0] * eye[0] + n[1] * eye[1] + n[2] * eye[2])) / den; if (t0 > 0) return t0; }
+  } else if (o.type === 'box') {
+    let tmin = -Infinity, tmax = Infinity;
+    for (let k = 0; k < 3; k++) {
+      const inv = 1 / d[k];
+      let ta = (o.min[k] - eye[k]) * inv, tb = (o.max[k] - eye[k]) * inv;
+      if (ta > tb) [ta, tb] = [tb, ta];
+      tmin = Math.max(tmin, ta); tmax = Math.min(tmax, tb);
+    }
+    if (tmax >= tmin && tmin > 0) return tmin;
+  }
+  return Infinity;
+}

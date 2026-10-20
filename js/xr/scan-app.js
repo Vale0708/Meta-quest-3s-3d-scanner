@@ -4,6 +4,26 @@ import * as THREE from 'three';
 import { FusionClient } from '../fusion/client.js';
 import { Panel, makeLabel } from './panel.js';
 import { evaluateMeasurement, describeMeasurement, pivotCalibration } from '../measure.js';
+import { saveModel } from './color-camera.js';
+
+// Projects the live camera image onto the preview (to align the color camera).
+const PROJ_VS = `
+uniform mat4 uCamVP;
+varying vec4 vProj;
+void main() {
+  vec4 w = modelMatrix * vec4(position, 1.0);
+  vProj = uCamVP * w;
+  gl_Position = projectionMatrix * viewMatrix * w;
+}`;
+const PROJ_FS = `
+uniform sampler2D uTex;
+varying vec4 vProj;
+void main() {
+  if (vProj.w <= 0.0) discard;
+  vec2 uv = vProj.xy / vProj.w * 0.5 + 0.5;
+  if (uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0) { gl_FragColor = vec4(0.3, 0.3, 0.3, 0.4); return; }
+  gl_FragColor = vec4(texture2D(uTex, uv).rgb, 0.85);
+}`;
 
 const TOOLS = ['none', 'point', 'distance', 'circle', 'plane'];
 const TOOL_NAMES = { none: 'Aus', point: 'Punkt', distance: 'Abstand', circle: 'Kreis/Ø', plane: 'Ebene', calibrate: 'Kalibrieren' };
@@ -24,6 +44,8 @@ export class ScanApp {
     this.onSave = o.onSave;
     this.onExit = o.onExit;
     this.caps = o.caps || {};
+    this.colorCam = o.colorCam || null; // ColorCamera or a simulated one
+    this.colorCal = false;
     this.phase = this.mode.box ? 'place' : 'ready';
     this.tool = 'none';
     this.preview = true;
@@ -46,13 +68,22 @@ export class ScanApp {
       minDepth: this.mode.minDepth,
       maxDepth: this.mode.maxDepth,
       box: null,
+      color: !!this.colorCam,
     }, o.orientation || 'auto');
 
     this.root = new THREE.Group();
     this.scene.add(this.root);
 
     // live preview of the fused surface
-    this.previewMesh = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshNormalMaterial({ transparent: true, opacity: 0.55, side: THREE.DoubleSide }));
+    this.materials = {
+      normal: new THREE.MeshNormalMaterial({ transparent: true, opacity: 0.55, side: THREE.DoubleSide }),
+      color: new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.85, side: THREE.DoubleSide }),
+      project: new THREE.ShaderMaterial({
+        vertexShader: PROJ_VS, fragmentShader: PROJ_FS, transparent: true, side: THREE.DoubleSide,
+        uniforms: { uCamVP: { value: new THREE.Matrix4() }, uTex: { value: null } },
+      }),
+    };
+    this.previewMesh = new THREE.Mesh(new THREE.BufferGeometry(), this.materials.normal);
     this.previewMesh.frustumCulled = false;
     this.root.add(this.previewMesh);
     this.previewBusy = false;
@@ -115,15 +146,18 @@ export class ScanApp {
         const g = new THREE.BufferGeometry();
         g.setAttribute('position', new THREE.BufferAttribute(m.positions, 3));
         g.setIndex(new THREE.BufferAttribute(m.indices, 1));
+        if (m.colors) g.setAttribute('color', new THREE.BufferAttribute(m.colors, 3, true));
         g.computeVertexNormals();
         this.previewMesh.geometry.dispose();
         this.previewMesh.geometry = g;
+        this.previewHasColor = !!m.colors;
         this.previewTris = m.indices.length / 3;
         this.previewBusy = false;
         this.previewAt = performance.now();
       }).catch(() => { this.previewBusy = false; });
     }
-    this.previewMesh.visible = this.preview;
+    this.previewMesh.visible = this.preview || this.colorCal;
+    this.previewMesh.material = this.colorCal ? this.materials.project : this.previewHasColor ? this.materials.color : this.materials.normal;
 
     this._updateLive();
     this.panel.set(this.panelContent());
@@ -169,6 +203,38 @@ export class ScanApp {
     this.box.center[1] = bottom + this.box.half[1]; // keep the box standing on the table
     this.box.yaw += dYaw;
     if (this.phase !== 'place') this.fusion.setBox({ center: this.box.center.slice(), half: this.box.half.slice(), yaw: this.box.yaw });
+  }
+
+  // ---- color camera alignment
+
+  toggleColorCal() {
+    if (!this.colorCam) return;
+    this.colorCal = !this.colorCal;
+    if (!this.colorCal) {
+      saveModel(this.colorCam.model);
+      // colors fused with the old alignment are discarded
+      this.fusion.clearColor();
+      this.previewStale = true;
+      this.message = 'Farbausrichtung gespeichert';
+    } else {
+      this.previewStale = true;
+      if (!this.fusion.stats.blocks) this.message = '!Erst kurz scannen, dann ausrichten';
+    }
+  }
+
+  // dYaw/dPitch in rad, dFov in degrees
+  adjustColorModel(dYaw, dPitch, dFov) {
+    const m = this.colorCam.model;
+    m.yaw += dYaw;
+    m.pitch += dPitch;
+    m.hfov = Math.min(120, Math.max(30, m.hfov + dFov));
+  }
+
+  // per frame from the driver: view-projection of the color camera + image texture
+  setProjector(viewProj, texture) {
+    const u = this.materials.project.uniforms;
+    u.uCamVP.value.fromArray(viewProj);
+    u.uTex.value = texture;
   }
 
   reset() {
@@ -288,7 +354,7 @@ export class ScanApp {
       mode: this.mode.id,
       created: Date.now(),
       voxelSize: this.mode.voxelSize,
-      mesh: { positions: mesh.positions, indices: mesh.indices },
+      mesh: mesh.colors ? { positions: mesh.positions, indices: mesh.indices, colors: mesh.colors } : { positions: mesh.positions, indices: mesh.indices },
       sceneMeshes: [...this.sceneMeshes.values()].map(({ label, positions, indices }) => ({ label, positions, indices })),
       planes: [...this.planes.values()],
       measurements: this.measurements,
@@ -317,6 +383,7 @@ export class ScanApp {
       case 'tool': this.cycleTool(); break;
       case 'mdone': this.finishMeasurement(); break;
       case 'undo': this.undo(); break;
+      case 'colorcal': this.toggleColorCal(); break;
       case 'calib': this.setTool(this.tool === 'calibrate' ? 'none' : 'calibrate'); break;
       case 'room': this.caps.roomCapture?.().catch((e) => { this.message = '!' + e.message; }); break;
       case 'reset': this.reset(); break;
@@ -337,6 +404,12 @@ export class ScanApp {
     if (this.tool === 'calibrate') lines.push('Spitze auf festen Punkt, Trigger halten, kippen');
     else if (this.tool !== 'none') lines.push(`Messen: ${TOOL_NAMES[this.tool]} – Trigger setzt Punkt (${this.points.length})`);
     if (this.mode.id === 'room') lines.push(`Quest-Raum: ${this.sceneMeshes.size} Meshes, ${this.planes.size} Flächen`);
+    if (this.colorCam) {
+      const cm = this.colorCam.model;
+      if (this.colorCal) lines.push(`Ausrichten: Stick = Drehen/Kippen, linker Stick = FOV (${cm.hfov.toFixed(1)}°)`);
+      else if (!this.colorCam.frames && this.colorCam.grabs > 5) lines.push('!Kamera liefert keine Bilder');
+      else lines.push(`Farbe: ${this.colorCam.grabs} Kamerabilder`);
+    }
     if (this.message) lines.push(this.message);
 
     const b = [];
@@ -349,6 +422,7 @@ export class ScanApp {
     b.push({ id: 'mdone', label: 'Messung fertig', disabled: !(this.tool === 'circle' || this.tool === 'plane') });
     b.push({ id: 'undo', label: 'Rückgängig (B)' });
     b.push({ id: 'calib', label: 'Spitze kalibrieren', active: this.tool === 'calibrate' });
+    if (this.colorCam) b.push({ id: 'colorcal', label: this.colorCal ? 'Ausrichten fertig' : 'Farbe ausrichten', active: this.colorCal });
     b.push({ id: 'reset', label: 'Scan löschen', danger: true });
     b.push({ id: 'exit', label: 'Abbrechen', danger: true });
     b.push({ id: 'finish', label: '✔ Fertig & Speichern', wide: true, disabled: this.phase === 'saving' || (st.blocks === 0 && !this.measurements.length && !this.sceneMeshes.size) });

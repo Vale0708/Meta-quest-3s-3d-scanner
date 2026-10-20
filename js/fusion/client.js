@@ -36,7 +36,9 @@ export class FusionClient {
       case 'mesh': {
         const r = this._req.get(m.id);
         this._req.delete(m.id);
-        r?.resolve({ positions: m.positions, indices: m.indices, ms: m.ms });
+        const mesh = { positions: m.positions, indices: m.indices, ms: m.ms };
+        if (m.colors) mesh.colors = m.colors;
+        r?.resolve(mesh);
         break;
       }
       case 'error': {
@@ -61,11 +63,18 @@ export class FusionClient {
     this.worker.postMessage({ type: 'clear' });
   }
 
-  // Hands over a depth frame (the buffer is transferred). Returns false while busy.
+  clearColor() {
+    this.worker.postMessage({ type: 'clearColor' });
+  }
+
+  // Hands over a depth frame, optionally with a color frame (buffers are transferred).
+  // Returns false while busy.
   pushFrame(f) {
     if (this.busy) return false;
     this.busy = true;
-    this.worker.postMessage({ type: 'frame', ...f }, [f.depth.buffer]);
+    const transfer = [f.depth.buffer];
+    if (f.color) transfer.push(f.color.rgba.buffer);
+    this.worker.postMessage({ type: 'frame', ...f }, transfer);
     return true;
   }
 

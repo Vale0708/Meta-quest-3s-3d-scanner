@@ -2,6 +2,8 @@
 // planar FACE_SURFACE bounded by a POLY_LOOP. Every part becomes an
 // OPEN_SHELL of a SHELL_BASED_SURFACE_MODEL. CAD programs (FreeCAD, Fusion,
 // SolidWorks, Inventor, …) import this as surfaces / a surface body.
+// Colors (vertex colors or a part color) are written as STYLED_ITEMs per face,
+// quantized to a palette so that styles are shared.
 // Units: millimeters.
 
 function num(v) {
@@ -15,7 +17,7 @@ function esc(s) {
 }
 
 /**
- * @param {{name: string, mesh: {positions: Float32Array, indices: Uint32Array}}[]} parts
+ * @param {{name: string, color?: number[], mesh: {positions: Float32Array, indices: Uint32Array, colors?: Uint8Array}}[]} parts
  * @param {{name?: string, author?: string}} [o]
  * @returns {string}
  */
@@ -44,8 +46,30 @@ export function toSTEP(parts, o = {}) {
   const dx = e("DIRECTION('',(1.,0.,0.))");
   const ax0 = e(`AXIS2_PLACEMENT_3D('',#${o0},#${dz},#${dx})`);
 
+  // color styles, shared per quantized color
+  const styles = new Map();
+  const styled = [];
+  const styleFor = (r, g, b) => {
+    const q = (v) => Math.min(255, Math.round(v / 17) * 17); // 16 levels per channel
+    r = q(r); g = q(g); b = q(b);
+    const key = (r << 16) | (g << 8) | b;
+    let st = styles.get(key);
+    if (!st) {
+      const col = e(`COLOUR_RGB('',${(r / 255).toFixed(4)},${(g / 255).toFixed(4)},${(b / 255).toFixed(4)})`);
+      const fasc = e(`FILL_AREA_STYLE_COLOUR('',#${col})`);
+      const fas = e(`FILL_AREA_STYLE('',(#${fasc}))`);
+      const ssfa = e(`SURFACE_STYLE_FILL_AREA(#${fas})`);
+      const sss = e(`SURFACE_SIDE_STYLE('',(#${ssfa}))`);
+      const ssu = e(`SURFACE_STYLE_USAGE(.BOTH.,#${sss})`);
+      st = e(`PRESENTATION_STYLE_ASSIGNMENT((#${ssu}))`);
+      styles.set(key, st);
+    }
+    return st;
+  };
+
   const shells = [];
   for (const part of parts) {
+    const vc = part.mesh.colors;
     const p = part.mesh.positions, idx = part.mesh.indices;
     const nv = p.length / 3;
     const pt = new Int32Array(nv).fill(0);
@@ -69,13 +93,18 @@ export function toSTEP(parts, o = {}) {
       const dr = e(`DIRECTION('',(${(ux / ul).toFixed(6)},${(uy / ul).toFixed(6)},${(uz / ul).toFixed(6)}))`);
       const ax = e(`AXIS2_PLACEMENT_3D('',#${pt[a]},#${dn},#${dr})`);
       const pl = e(`PLANE('',#${ax})`);
-      faces.push(e(`FACE_SURFACE('',(#${bound}),#${pl},.T.)`));
+      const face = e(`FACE_SURFACE('',(#${bound}),#${pl},.T.)`);
+      faces.push(face);
+      let rgb = part.color;
+      if (vc) rgb = [0, 1, 2].map((k) => (vc[a * 3 + k] + vc[b * 3 + k] + vc[c * 3 + k]) / 3);
+      if (rgb) styled.push(e(`STYLED_ITEM('',(#${styleFor(...rgb)}),#${face})`));
     }
     if (faces.length) shells.push(e(`OPEN_SHELL('${esc(part.name)}',(${faces.map((f) => '#' + f).join(',')}))`));
   }
   const sbsm = e(`SHELL_BASED_SURFACE_MODEL('',(${shells.map((s) => '#' + s).join(',')}))`);
   const rep = e(`MANIFOLD_SURFACE_SHAPE_REPRESENTATION('${name}',(#${ax0},#${sbsm}),#${grc})`);
   e(`SHAPE_DEFINITION_REPRESENTATION(#${pds},#${rep})`);
+  if (styled.length) e(`MECHANICAL_DESIGN_GEOMETRIC_PRESENTATION_REPRESENTATION('',(${styled.map((s) => '#' + s).join(',')}),#${grc})`);
 
   const now = new Date().toISOString().slice(0, 19);
   const header = [

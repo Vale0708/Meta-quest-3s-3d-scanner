@@ -4,6 +4,7 @@ import { isARSupported, startXR, loadTipOffset } from './xr/xr-driver.js';
 import { saveScan, listScans, getScan, deleteScan } from './storage.js';
 import { buildParts, exportFile, DEFAULT_OPTIONS } from './export/pipeline.js';
 import { Viewer } from './viewer.js';
+import { listCameras, loadDeviceId, saveDeviceId } from './xr/color-camera.js';
 
 const $ = (s) => document.querySelector(s);
 let viewer = null;
@@ -19,7 +20,45 @@ function toast(msg, ms = 3500) {
 }
 
 function settings() {
-  return { quality: $('#quality').value, orientation: $('#orientation').value };
+  return { quality: $('#quality').value, orientation: $('#orientation').value, color: $('#color').checked };
+}
+
+// ---- camera test: permission, device selection, live preview
+let testStream = null;
+async function cameraTest() {
+  const info = $('#caminfo');
+  if (!navigator.mediaDevices?.getUserMedia) { info.textContent = 'Dieser Browser bietet keinen Kamerazugriff (getUserMedia fehlt).'; return; }
+  try {
+    testStream?.getTracks().forEach((t) => t.stop());
+    const id = $('#camdev').value || loadDeviceId();
+    testStream = await navigator.mediaDevices.getUserMedia({ video: id ? { deviceId: { exact: id } } : true, audio: false });
+    const v = $('#campreview');
+    v.srcObject = testStream;
+    v.hidden = false;
+    await v.play();
+    const cams = await listCameras();
+    const track = testStream.getVideoTracks()[0];
+    const cur = track.getSettings().deviceId;
+    $('#camdev').innerHTML = cams.map((c, i) => `<option value="${c.deviceId}" ${c.deviceId === cur ? 'selected' : ''}>${escapeHtml(c.label || 'Kamera ' + (i + 1))}</option>`).join('');
+    $('#camdev').hidden = cams.length < 2;
+    saveDeviceId(cur || '');
+    const st = track.getSettings();
+    info.textContent = `Kamera läuft: ${track.label || 'unbenannt'} (${st.width}×${st.height}). ${cams.length} Kamera(s) gefunden. Siehst du hier die echte Umgebung? Dann klappt die Farbe.`;
+    $('#color').checked = true;
+    storeColorPref();
+  } catch (e) {
+    info.textContent = `Kein Kamerazugriff: ${e.name || ''} ${e.message || e}. Der Quest-Browser gibt die Kameras evtl. nicht frei. Scannen geht trotzdem, nur ohne Farbe.`;
+  }
+}
+
+function stopCameraTest() {
+  testStream?.getTracks().forEach((t) => t.stop());
+  testStream = null;
+  $('#campreview').hidden = true;
+}
+
+function storeColorPref() {
+  try { localStorage.setItem('quest-scanner-color', $('#color').checked ? '1' : '0'); } catch { /* ignore */ }
 }
 
 function renderModes() {
@@ -52,7 +91,7 @@ function escapeHtml(s) {
 
 function exportOptions() {
   const o = { ...DEFAULT_OPTIONS };
-  for (const k of ['scan', 'sceneMesh', 'planes', 'measurements', 'clean', 'align']) o[k] = $('#o-' + k).checked;
+  for (const k of ['scan', 'sceneMesh', 'planes', 'measurements', 'clean', 'align', 'colors']) o[k] = $('#o-' + k).checked;
   o.smooth = +$('#o-smooth').value;
   o.stepMaxTris = Math.max(500, +$('#o-stepMaxTris').value || 30000);
   o.cutBottom = Math.max(0, +$('#o-cutBottom').value || 0);
@@ -80,6 +119,7 @@ async function openScan(id) {
   $('#o-smooth').value = mode?.smooth ?? 3;
   $('#o-smooth-v').textContent = $('#o-smooth').value;
   $('#o-sceneMesh').checked = current.sceneMeshes.length > 0;
+  $('#o-colors').disabled = !current.mesh.colors;
   $('#o-sceneMesh').disabled = !current.sceneMeshes.length;
   $('#o-planes').disabled = !current.planes.length;
   $('#o-align').disabled = current.yaw != null;
@@ -128,15 +168,17 @@ async function onSave(rec) {
 
 function showDiag(diag) {
   const d = diag?.depth || {};
-  $('#lastdiag').textContent = diag ? `Letzte Sitzung: Features ${diag.features?.join(', ') || '–'} · Tiefe ${diag.depthUsage ?? '–'}/${diag.depthFormat ?? '–'}, ${d.frames ?? 0} Bilder, ${d.size ?? ''}, ${d.decode ?? ''}, near ${d.near ?? '–'} far ${d.far ?? '–'}, Median ${d.median ? d.median.toFixed(2) + ' m' : '–'}, gültig ${d.validRatio != null ? Math.round(d.validRatio * 100) + ' %' : '–'}, Ausrichtung ${diag.orientation ?? '–'}${d.lastError ? ' · Fehler: ' + d.lastError : ''}` : '';
+  $('#lastdiag').textContent = diag ? `Letzte Sitzung: Features ${diag.features?.join(', ') || '–'} · Tiefe ${diag.depthUsage ?? '–'}/${diag.depthFormat ?? '–'}, ${d.frames ?? 0} Bilder, ${d.size ?? ''}, ${d.decode ?? ''}, near ${d.near ?? '–'} far ${d.far ?? '–'}, Median ${d.median ? d.median.toFixed(2) + ' m' : '–'}, gültig ${d.validRatio != null ? Math.round(d.validRatio * 100) + ' %' : '–'}, Ausrichtung ${diag.orientation ?? '–'}, Farbe ${diag.color ?? '–'}${diag.colorFrames != null ? ` (${diag.colorFrames} Kamerabilder)` : ''}${d.lastError ? ' · Fehler: ' + d.lastError : ''}` : '';
 }
 
 async function startScan(id) {
   const s = settings();
   const mode = modeConfig(id, s.quality);
+  stopCameraTest();
   try {
     await startXR({
       mode,
+      color: s.color,
       orientation: s.orientation,
       onSave,
       onEnd: async ({ saved, diag }) => {
@@ -159,6 +201,7 @@ async function startSimulation(id) {
   window.__sim = startSim({
     container: stage,
     mode,
+    color: settings().color,
     onSave,
     onEnd: async () => {
       stage.hidden = true;
@@ -183,6 +226,9 @@ async function init() {
       : 'Die Seite muss über <b>https://</b> geladen werden, sonst ist WebXR gesperrt (siehe README).';
   }
   renderModes();
+  try { $('#color').checked = localStorage.getItem('quest-scanner-color') === '1'; } catch { /* ignore */ }
+  $('#color').addEventListener('change', storeColorPref);
+  $('#camdev').addEventListener('change', () => { saveDeviceId($('#camdev').value); cameraTest(); });
   const tip = loadTipOffset();
   $('#tipinfo').textContent = tip.some((v) => v) ? `kalibriert (${tip.map((v) => (v * 1000).toFixed(1)).join(' / ')} mm)` : 'nicht kalibriert (Standard: Strahl-Ursprung)';
   try { showDiag(JSON.parse(localStorage.getItem('quest-scanner-diag'))); } catch { /* ignore */ }
@@ -201,6 +247,7 @@ async function init() {
       refreshList();
     } else if (t.dataset.fmt) doExport(t.dataset.fmt);
     else if (t.id === 'close') { current = null; $('#detail').hidden = true; }
+    else if (t.id === 'camtest') cameraTest();
     else if (t.id === 'tipreset') { localStorage.removeItem('quest-scanner-tip-offset'); $('#tipinfo').textContent = 'zurückgesetzt'; }
   });
   $('#detail').addEventListener('input', (e) => {

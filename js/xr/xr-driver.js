@@ -2,6 +2,7 @@
 import * as THREE from 'three';
 import { ScanApp } from './scan-app.js';
 import { DepthReader } from './depth-reader.js';
+import { ColorCamera, PoseHistory, cameraPose, projFromModel, mul4 } from './color-camera.js';
 
 const TIP_KEY = 'quest-scanner-tip-offset';
 
@@ -26,6 +27,7 @@ export async function isARSupported() {
  * @param {object} o
  * @param {object} o.mode
  * @param {string} o.orientation
+ * @param {boolean} [o.color]  capture colors with the camera (getUserMedia)
  * @param {(rec) => Promise<void>} o.onSave
  * @param {(info: {saved: boolean, diag: object}) => void} o.onEnd
  */
@@ -53,9 +55,17 @@ export async function startXR(o) {
   const camera = new THREE.PerspectiveCamera(70, 1, 0.01, 50);
   scene.add(new THREE.HemisphereLight(0xffffff, 0x444444, 2));
 
+  // color camera (only if the browser hands out the passthrough cameras)
+  let colorCam = null, colorError = '';
+  if (o.color) {
+    try { colorCam = await new ColorCamera().start(); } catch (e) { colorError = e.message || String(e); colorCam = null; }
+  }
+  const poses = new PoseHistory();
+  const videoTex = colorCam ? new THREE.VideoTexture(colorCam.video) : null;
+
   let saved = false;
   const features = session.enabledFeatures || [];
-  const diag = { features: [...features], depthUsage: null, depthFormat: null };
+  const diag = { features: [...features], depthUsage: null, depthFormat: null, color: colorCam ? colorCam.label || 'ja' : (o.color ? 'Fehler: ' + colorError : 'aus') };
 
   const app = new ScanApp({
     scene,
@@ -64,7 +74,9 @@ export async function startXR(o) {
     onSave: async (rec) => { rec.stats.depth = { ...depthReader.info }; await o.onSave(rec); saved = true; },
     onExit: () => session.end(),
     caps: session.initiateRoomCapture ? { roomCapture: () => session.initiateRoomCapture() } : {},
+    colorCam,
   });
+  if (o.color && !colorCam) app.message = '!Kamera nicht verfügbar: ' + colorError.slice(0, 40);
   window.__scanApp = app; // for debugging in the browser console
   if (features.length && !features.includes('depth-sensing')) app.message = '!Depth API nicht verfügbar – nur Messen/Raum-Mesh';
 
@@ -105,14 +117,24 @@ export async function startXR(o) {
     frameNo++;
     const ref = renderer.xr.getReferenceSpace();
 
-    // ---- depth
+    const viewer = frame ? frame.getViewerPose(ref) : null;
+    if (viewer) poses.push(now, viewer.transform.matrix);
+
+    // ---- depth (+ color)
     if (frame && features.includes('depth-sensing')) {
-      const pose = frame.getViewerPose(ref);
+      const pose = viewer;
       if (pose && pose.views.length && frameNo % 2 === 0 && !app.fusion.busy) {
         depthReader.capture(frame, pose.views[0], session);
       }
       const f = depthReader.poll();
-      if (f) app.onDepthFrame(f);
+      if (f) {
+        if (colorCam?.active && app.phase === 'scanning') {
+          const c = colorCam.grab(128);
+          const head = c && poses.at(c.time);
+          if (head) f.color = { width: c.width, height: c.height, rgba: c.rgba, proj: projFromModel(colorCam.model, c.width / c.height), camToWorld: cameraPose(head, colorCam.model) };
+        }
+        app.onDepthFrame(f);
+      }
       diag.depthUsage = session.depthUsage;
       diag.depthFormat = session.depthDataFormat;
     }
@@ -162,14 +184,21 @@ export async function startXR(o) {
       if (edge(4)) app.startPause();
       if (edge(5)) app.undo();
       const sx = gp.axes[2] || 0, sy = gp.axes[3] || 0;
-      if (Math.abs(sy) > 0.2) app.adjustBox(-sy * dt * 0.6, 0);
-      if (Math.abs(sx) > 0.2) app.adjustBox(0, -sx * dt * 1.2);
+      if (app.colorCal) {
+        // align the color camera: right stick = yaw/pitch
+        if (Math.abs(sx) > 0.2) app.adjustColorModel(-sx * dt * 0.15, 0, 0);
+        if (Math.abs(sy) > 0.2) app.adjustColorModel(0, -sy * dt * 0.15, 0);
+      } else {
+        if (Math.abs(sy) > 0.2) app.adjustBox(-sy * dt * 0.6, 0);
+        if (Math.abs(sx) > 0.2) app.adjustBox(0, -sx * dt * 1.2);
+      }
     }
     const lgp = left?.userData.source?.gamepad;
     if (lgp) {
       const lud = left.userData;
       const sy = lgp.axes[3] || 0;
-      if (Math.abs(sy) > 0.2) app.adjustBox(0, 0, -sy * dt * 0.6);
+      if (app.colorCal) { if (Math.abs(sy) > 0.2) app.adjustColorModel(0, 0, -sy * dt * 8); }
+      else if (Math.abs(sy) > 0.2) app.adjustBox(0, 0, -sy * dt * 0.6);
       const p4 = !!lgp.buttons[4]?.pressed, p5 = !!lgp.buttons[5]?.pressed;
       if (p4 && !lud.prev[4]) app.panel.mesh.visible = !app.panel.mesh.visible; // X: hide/show panel
       if (p5 && !lud.prev[5]) app.cycleTool(); // Y: next measuring tool
@@ -191,6 +220,14 @@ export async function startXR(o) {
       pm.lookAt(headPanel.position);
     }
 
+    // live projection of the camera image for the alignment
+    if (app.colorCal && colorCam && viewer) {
+      const cam = cameraPose(viewer.transform.matrix, colorCam.model);
+      const view = new THREE.Matrix4().fromArray(cam).invert();
+      const vp = mul4(projFromModel(colorCam.model, colorCam.aspect), view.elements);
+      app.setProjector(vp, videoTex);
+    }
+
     app.update(now);
     renderer.render(scene, camera);
   });
@@ -200,6 +237,9 @@ export async function startXR(o) {
     diag.depth = { ...depthReader.info };
     diag.orientation = app.fusion.orientation;
     depthReader.dispose();
+    if (colorCam) diag.colorFrames = colorCam.frames;
+    colorCam?.stop();
+    videoTex?.dispose();
     app.dispose();
     renderer.dispose();
     renderer.domElement.remove();

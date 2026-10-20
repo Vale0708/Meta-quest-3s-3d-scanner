@@ -22,6 +22,15 @@
     <section id="start">
       <h2>Neuer Scan</h2>
       <div class="modes" id="modes"></div>
+      <div class="colorbox">
+        <label class="big"><input type="checkbox" id="color"> Farbe aufnehmen (Kamera der Quest)</label>
+        <div class="row">
+          <button id="camtest" class="small">Kamera testen</button>
+          <select id="camdev" hidden aria-label="Kamera"></select>
+        </div>
+        <p id="caminfo" class="hint">Vor dem ersten Farb-Scan einmal „Kamera testen“ drücken und den Zugriff erlauben.</p>
+        <video id="campreview" class="campreview" muted playsinline hidden></video>
+      </div>
       <details class="settings">
         <summary>Einstellungen</summary>
         <label>Auflösung
@@ -63,6 +72,7 @@
           <label><input type="checkbox" id="o-sceneMesh" checked> Raum-Mesh der Quest</label>
           <label><input type="checkbox" id="o-planes"> Raumflächen (Wände/Boden)</label>
           <label><input type="checkbox" id="o-measurements" checked> Messungen als Geometrie</label>
+          <label><input type="checkbox" id="o-colors" checked> Farben (PLY, OBJ, STEP)</label>
         </fieldset>
         <fieldset>
           <legend>Aufbereitung</legend>
@@ -70,12 +80,13 @@
           <label><input type="checkbox" id="o-clean" checked> Rauschinseln entfernen</label>
           <label><input type="checkbox" id="o-align" checked> Raum an Wänden ausrichten</label>
           <label>Auflage abschneiden <input type="number" id="o-cutBottom" value="0" min="0" max="200" step="1" style="width:5em"> mm</label>
-          <label>STEP max. Dreiecke <input type="number" id="o-stepMaxTris" value="30000" min="500" step="1000"></label>
+          <label>STEP max. Dreiecke <input type="number" id="o-stepMaxTris" value="15000" min="500" step="1000"></label>
         </fieldset>
         <div class="buttons">
           <button data-fmt="stl" class="primary">STL</button>
           <button data-fmt="step" class="primary">STEP</button>
           <button data-fmt="obj">OBJ</button>
+          <button data-fmt="ply">PLY (Farbe)</button>
           <button data-fmt="csv">Messungen (CSV)</button>
         </div>
         <p id="exportinfo" class="hint"></p>
@@ -93,8 +104,10 @@
         <li><b>Messen</b> (genauer als der Scan): Messwerkzeug wählen und die Spitze antippen.
           <i>Abstand</i> braucht 2 Punkte, <i>Kreis/Ø</i> mindestens 3 Punkte rund um eine Stange, <i>Ebene</i> mindestens 3 Punkte. Danach „Messung fertig“. <b>B</b> macht den letzten Punkt rückgängig.</li>
         <li><b>Spitze kalibrieren</b> (einmalig, wichtig für mm-Genauigkeit): Werkzeug wählen. Dann die Controllerspitze in eine kleine Vertiefung halten, Trigger gedrückt halten und den Controller ca. 5 s in alle Richtungen kippen, ohne dass die Spitze wegrutscht.</li>
+        <li><b>Farbe</b> (optional): Oben „Farbe aufnehmen“ anhaken. In VR erst kurz scannen, dann <b>Farbe ausrichten</b>: Das Kamerabild wird auf die Vorschau projiziert, mit dem rechten Stick drehen/kippen und dem linken Stick das Sichtfeld anpassen, bis es mit der echten Welt übereinstimmt. Danach „Ausrichten fertig“. Die Einstellung bleibt gespeichert.</li>
         <li><b>Fertig &amp; Speichern</b>, dann hier exportieren. Die Datei landet im Download-Ordner der Quest.</li>
       </ol>
+      <p class="hint"><b>Fusion 360:</b> STL/OBJ über <i>Einfügen → Netz einfügen</i> (Einheit mm). STEP öffnet sich als Flächenkörper mit Farben; dafür max. 10–20 Tsd. Dreiecke wählen.</p>
       <p class="hint">Koordinaten im Export: Millimeter, Z nach oben. Objekt-Modi: Nullpunkt = Mitte der Box-Unterseite. Raum: Nullpunkt = Boden unter der Startposition.</p>
     </section>
   </main>

@@ -55,3 +55,7 @@ th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #2a3240; }
 .sim-ui .sim-lines .warn { color: var(--warn); }
 .sim-ui button { font-size: 13px; padding: 6px 8px; min-height: 36px; }
 .sim-ui button[data-id=finish] { grid-column: 1 / -1; }
+.colorbox { margin-top: 14px; background: var(--panel2); border-radius: 12px; padding: 12px 14px; }
+.colorbox .big { font-weight: 600; }
+.colorbox .row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+.campreview { width: 100%; max-width: 360px; border-radius: 8px; margin-top: 8px; background: #000; }

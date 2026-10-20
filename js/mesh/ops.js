@@ -1,4 +1,5 @@
-// Mesh operations on indexed triangle meshes {positions: Float32Array, indices: Uint32Array}.
+// Mesh operations on indexed triangle meshes
+// {positions: Float32Array, indices: Uint32Array, colors?: Uint8Array (RGB per vertex)}.
 // No three.js dependency, so they run in the worker and in Node.
 
 export function emptyMesh() {
@@ -21,19 +22,30 @@ export function bounds(m) {
   return { min, max };
 }
 
+// Gray for parts without colors when merging with colored ones
+export const DEFAULT_GRAY = 170;
+
 export function mergeMeshes(list) {
   let nv = 0, ni = 0;
   for (const m of list) { nv += m.positions.length; ni += m.indices.length; }
   const positions = new Float32Array(nv), indices = new Uint32Array(ni);
+  const colors = list.some((m) => m.colors) ? new Uint8Array(nv).fill(DEFAULT_GRAY) : null;
   let ov = 0, oi = 0;
   for (const m of list) {
     positions.set(m.positions, ov);
+    if (colors && m.colors) colors.set(m.colors, ov);
     const base = ov / 3;
     for (let i = 0; i < m.indices.length; i++) indices[oi + i] = m.indices[i] + base;
     ov += m.positions.length;
     oi += m.indices.length;
   }
-  return { positions, indices };
+  return colors ? { positions, indices, colors } : { positions, indices };
+}
+
+// Copies the vertex colors (if present) onto a result mesh.
+function withColors(result, colors) {
+  if (colors) result.colors = colors;
+  return result;
 }
 
 // Applies a column-major 4×4 matrix to all vertices (returns a new mesh).
@@ -52,7 +64,7 @@ export function transformMesh(m, M) {
     indices = new Uint32Array(m.indices);
     for (let i = 0; i < indices.length; i += 3) { const t = indices[i + 1]; indices[i + 1] = indices[i + 2]; indices[i + 2] = t; }
   }
-  return { positions: out, indices };
+  return withColors({ positions: out, indices }, m.colors);
 }
 
 // Drops vertices no triangle references.
@@ -67,7 +79,15 @@ export function compact(m) {
   }
   const indices = new Uint32Array(m.indices.length);
   for (let i = 0; i < indices.length; i++) indices[i] = map[m.indices[i]];
-  return { positions, indices };
+  let colors = null;
+  if (m.colors) {
+    colors = new Uint8Array(n * 3);
+    for (let v = 0; v < map.length; v++) {
+      const t = map[v];
+      if (t >= 0) { colors[t * 3] = m.colors[v * 3]; colors[t * 3 + 1] = m.colors[v * 3 + 1]; colors[t * 3 + 2] = m.colors[v * 3 + 2]; }
+    }
+  }
+  return withColors({ positions, indices }, colors);
 }
 
 // Removes small connected components (noise blobs). Keeps components with at
@@ -88,7 +108,7 @@ export function removeSmallComponents(m, { minTris = 50, minFraction = 0.02 } = 
   for (let i = 0; i < idx.length; i += 3) {
     if (count.get(find(idx[i])) >= keepMin) out.push(idx[i], idx[i + 1], idx[i + 2]);
   }
-  return compact({ positions: m.positions, indices: new Uint32Array(out) });
+  return compact(withColors({ positions: m.positions, indices: new Uint32Array(out) }, m.colors));
 }
 
 function adjacency(m) {
@@ -130,7 +150,7 @@ export function taubinSmooth(m, iterations = 5, lambda = 0.5, mu = -0.53) {
     const t = p; p = q; q = t;
   };
   for (let i = 0; i < iterations; i++) { pass(lambda); pass(mu); }
-  return { positions: p, indices: m.indices };
+  return withColors({ positions: p, indices: m.indices }, m.colors);
 }
 
 // Vertex clustering: merges all vertices within a grid cell (fast, robust).
@@ -141,20 +161,30 @@ export function decimateCluster(m, cell) {
   const cellOf = new Map();
   const remap = new Uint32Array(nv);
   const acc = [];
+  const cacc = [];
   for (let v = 0; v < nv; v++) {
     const kx = Math.floor((p[v * 3] - b.min[0]) / cell);
     const ky = Math.floor((p[v * 3 + 1] - b.min[1]) / cell);
     const kz = Math.floor((p[v * 3 + 2] - b.min[2]) / cell);
     const key = (kx * ny + ky) * nz + kz;
     let c = cellOf.get(key);
-    if (c === undefined) { c = acc.length / 4; cellOf.set(key, c); acc.push(0, 0, 0, 0); }
+    if (c === undefined) { c = acc.length / 4; cellOf.set(key, c); acc.push(0, 0, 0, 0); if (m.colors) cacc.push(0, 0, 0); }
     acc[c * 4] += p[v * 3]; acc[c * 4 + 1] += p[v * 3 + 1]; acc[c * 4 + 2] += p[v * 3 + 2]; acc[c * 4 + 3]++;
+    if (m.colors) { cacc[c * 3] += m.colors[v * 3]; cacc[c * 3 + 1] += m.colors[v * 3 + 1]; cacc[c * 3 + 2] += m.colors[v * 3 + 2]; }
     remap[v] = c;
   }
   const positions = new Float32Array((acc.length / 4) * 3);
   for (let c = 0; c < acc.length / 4; c++) {
     const n = acc[c * 4 + 3];
     positions[c * 3] = acc[c * 4] / n; positions[c * 3 + 1] = acc[c * 4 + 1] / n; positions[c * 3 + 2] = acc[c * 4 + 2] / n;
+  }
+  let colors = null;
+  if (m.colors) {
+    colors = new Uint8Array(positions.length);
+    for (let c = 0; c < acc.length / 4; c++) {
+      const n = acc[c * 4 + 3];
+      for (let k = 0; k < 3; k++) colors[c * 3 + k] = Math.round(cacc[c * 3 + k] / n);
+    }
   }
   const seen = new Set();
   const out = [];
@@ -170,7 +200,7 @@ export function decimateCluster(m, cell) {
     seen.add(key);
     out.push(a, b, c);
   }
-  return compact({ positions, indices: new Uint32Array(out) });
+  return compact(withColors({ positions, indices: new Uint32Array(out) }, colors));
 }
 
 // Reduces to roughly targetTris triangles (binary search on cell size).

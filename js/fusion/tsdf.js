@@ -50,6 +50,7 @@ export class TsdfVolume {
     this.maxDepth = o.maxDepth ?? 4;
     this.edgeFilter = o.edgeFilter ?? 0.04; // relative depth jump that marks an edge pixel
     this.allocStride = o.allocStride ?? 2;
+    this.color = !!o.color; // also fuse RGB from a color camera
     this.setBox(o.box ?? null);
     this.blocks = new Map();
     this.frames = 0;
@@ -76,6 +77,10 @@ export class TsdfVolume {
       Math.abs(lz) <= b.half[2] + margin;
   }
 
+  clearColor() {
+    for (const b of this.blocks.values()) if (b.cw) { b.cw.fill(0); b.rgb.fill(0); }
+  }
+
   clear() {
     this.blocks.clear();
     this.frames = 0;
@@ -86,6 +91,7 @@ export class TsdfVolume {
     let b = this.blocks.get(k);
     if (!b && create) {
       b = { bx, by, bz, tsdf: new Float32Array(BV).fill(1), weight: new Float32Array(BV) };
+      if (this.color) { b.rgb = new Float32Array(BV * 3); b.cw = new Float32Array(BV); }
       this.blocks.set(k, b);
     }
     return b;
@@ -99,9 +105,11 @@ export class TsdfVolume {
    * @param {Float32Array} f.depth  z-depth in m, row 0 at the bottom
    * @param {ArrayLike<number>} f.proj      projection matrix of the depth camera
    * @param {ArrayLike<number>} f.camToWorld pose of the depth camera
+   * @param {object} [c] optional color frame taken at the same moment:
+   *   {width, height, rgba: Uint8Array (row 0 = top), proj, camToWorld}
    * @returns {number} number of updated blocks
    */
-  integrate(f) {
+  integrate(f, c = null) {
     const W = f.width, H = f.height, P = f.proj, M = f.camToWorld;
     const depth = this._filterEdges(f.depth, W, H);
     const vs = this.voxelSize, tr = this.truncation, bsz = vs * BLOCK;
@@ -142,6 +150,17 @@ export class TsdfVolume {
 
     // --- 2. Update every voxel of the touched blocks projectively ---
     const maxW = this.maxWeight;
+    // color camera: world → camera rotation (R^T rows) and projection
+    const useColor = this.color && c && c.rgba;
+    let CW = 0, CH = 0, cr = null, cp = null, ct = null, rgba = null;
+    if (useColor) {
+      const C = c.camToWorld;
+      CW = c.width; CH = c.height; rgba = c.rgba;
+      cr = [C[0], C[1], C[2], C[4], C[5], C[6], C[8], C[9], C[10]];
+      ct = [C[12], C[13], C[14]];
+      cp = [c.proj[0], c.proj[4], c.proj[8], c.proj[5], c.proj[9]];
+    }
+    const colorBand = tr * 0.5;
     const hasBox = !!this.box;
     for (const k of touched) {
       let b = this.blocks.get(k);
@@ -152,7 +171,7 @@ export class TsdfVolume {
         const bx = Math.floor(rest / 32768) - OFF;
         b = this._getBlock(bx, by, bz, true);
       }
-      const T = b.tsdf, Wt = b.weight;
+      const T = b.tsdf, Wt = b.weight, RGB = b.rgb, CWt = b.cw;
       const ox = b.bx * BLOCK, oy = b.by * BLOCK, oz = b.bz * BLOCK;
       let idx = 0;
       for (let z = 0; z < BLOCK; z++) {
@@ -185,6 +204,29 @@ export class TsdfVolume {
             const wSum = w0 + wNew;
             T[idx] = (T[idx] * w0 + val * wNew) / wSum;
             Wt[idx] = wSum > maxW ? maxW : wSum;
+            // color only for voxels close to the measured surface (= visible)
+            if (useColor && sdf < colorBand && sdf > -colorBand) {
+              const qx = wx - ct[0], qy = wy - ct[1], qz = wz - ct[2];
+              const cX = cr[0] * qx + cr[1] * qy + cr[2] * qz;
+              const cY = cr[3] * qx + cr[4] * qy + cr[5] * qz;
+              const cZ = cr[6] * qx + cr[7] * qy + cr[8] * qz;
+              if (cZ < -0.05) {
+                const xc = (cp[0] * cX + cp[1] * cY + cp[2] * cZ) / -cZ;
+                const yc = (cp[3] * cY + cp[4] * cZ) / -cZ;
+                const cu = Math.floor((xc + 1) * 0.5 * CW);
+                const cv = Math.floor((1 - yc) * 0.5 * CH); // image row 0 = top
+                if (cu >= 0 && cv >= 0 && cu < CW && cv < CH) {
+                  const o = (cv * CW + cu) * 4;
+                  // pixels in the image center are sharper → slightly higher weight
+                  const cw0 = CWt[idx], cwn = 1 - 0.5 * Math.max(Math.abs(xc), Math.abs(yc));
+                  const cs = cw0 + cwn;
+                  RGB[idx * 3] = (RGB[idx * 3] * cw0 + rgba[o] * cwn) / cs;
+                  RGB[idx * 3 + 1] = (RGB[idx * 3 + 1] * cw0 + rgba[o + 1] * cwn) / cs;
+                  RGB[idx * 3 + 2] = (RGB[idx * 3 + 2] * cw0 + rgba[o + 2] * cwn) / cs;
+                  CWt[idx] = cs > 30 ? 30 : cs;
+                }
+              }
+            }
           }
         }
       }
@@ -230,6 +272,9 @@ export class TsdfVolume {
     const vmap = new Map();
     const val = new Float32Array(8);
     const edgeVert = new Int32Array(12);
+    const withColor = this.color;
+    const colors = [];
+    const cBlk = new Array(8), cLi = new Int32Array(8);
 
     // neighbour lookup with a one-entry cache
     let cKey = -1, cBlock = null;
@@ -241,6 +286,7 @@ export class TsdfVolume {
       const li = (gx - bx * BLOCK) + BLOCK * ((gy - by * BLOCK) + BLOCK * (gz - bz * BLOCK));
       if (cBlock.weight[li] < minW) return false;
       out[i] = cBlock.tsdf[li];
+      cBlk[i] = cBlock; cLi[i] = li;
       return true;
     };
 
@@ -259,6 +305,7 @@ export class TsdfVolume {
                 const li = (x + C[0]) + BLOCK * ((y + C[1]) + BLOCK * (z + C[2]));
                 if (Wt[li] < minW) { ok = false; break; }
                 val[c] = T[li];
+                cBlk[c] = b; cLi[c] = li;
               }
             } else {
               for (let c = 0; c < 8; c++) {
@@ -291,6 +338,14 @@ export class TsdfVolume {
                 positions.push(ax * vs, ay * vs, az * vs);
                 positions[vi * 3 + E[2]] += t * vs;
                 vmap.set(key, vi);
+                if (withColor) {
+                  const A = cBlk[E[0]], B = cBlk[E[1]], ia = cLi[E[0]], ib = cLi[E[1]];
+                  const ca = A.cw[ia] > 0, cb = B.cw[ib] > 0;
+                  for (let k = 0; k < 3; k++) {
+                    const x0 = A.rgb[ia * 3 + k], x1 = B.rgb[ib * 3 + k];
+                    colors.push(ca && cb ? x0 + (x1 - x0) * t : ca ? x0 : cb ? x1 : 170);
+                  }
+                }
               }
               edgeVert[e] = vi;
             }
@@ -308,7 +363,9 @@ export class TsdfVolume {
         }
       }
     }
-    return { positions: new Float32Array(positions), indices: new Uint32Array(indices) };
+    const mesh = { positions: new Float32Array(positions), indices: new Uint32Array(indices) };
+    if (withColor) mesh.colors = Uint8Array.from(colors, (v) => Math.round(v));
+    return mesh;
   }
 
   stats() {

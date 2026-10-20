@@ -7,7 +7,8 @@ import { toSTEP } from '../js/export/step.js';
 import { toOBJ } from '../js/export/obj.js';
 import { fitCircle, fitPlane, pivotCalibration } from '../js/measure.js';
 import { cylinder } from '../js/mesh/primitives.js';
-import { perspective, lookAt, renderDepth, mulberry32 } from '../js/sim/synth.js';
+import { perspective, lookAt, renderDepth, renderColor, mulberry32 } from '../js/sim/synth.js';
+import { toPLY } from '../js/export/ply.js';
 import { toCadSpace } from '../js/mesh/cad.js';
 import { dominantYaw } from '../js/export/pipeline.js';
 
@@ -197,6 +198,44 @@ mkdirSync(outDir, { recursive: true });
     y0 = Math.min(y0, cad.positions[i + 1]); y1 = Math.max(y1, cad.positions[i + 1]);
   }
   check('Ausgerichtet: Tisch achsparallel', Math.abs(x1 - x0 - 2000) < 100 && Math.abs(y1 - y0 - 500) < 120, `${(x1 - x0).toFixed(0)} × ${(y1 - y0).toFixed(0)} mm (soll 2000 × 500)`);
+}
+
+// --- 6. Color fusion: sphere red on top, blue below; color camera offset from the depth camera ---
+{
+  const center = [0, 1.0, -0.6], r = 0.08;
+  const scene = [{ type: 'sphere', c: center, r, colorFn: (p) => (p[1] > center[1] ? [220, 30, 30] : [30, 60, 220]) }];
+  const vol = new TsdfVolume({ voxelSize: 0.005, truncation: 0.02, maxDepth: 2, color: true });
+  const P = perspective(1.2, 1, 0.1, 100);
+  const PC = perspective(1.0, 4 / 3, 0.1, 100); // different FOV/aspect than depth
+  for (let el = -0.8; el <= 0.81; el += 0.4) {
+    for (let az = 0; az < Math.PI * 2; az += Math.PI / 6) {
+      const eye = [center[0] + Math.cos(az) * Math.cos(el) * 0.5, center[1] + Math.sin(el) * 0.5, center[2] + Math.sin(az) * Math.cos(el) * 0.5];
+      const M = lookAt(eye, center);
+      // color camera 3 cm to the right of the depth camera, also aimed at the center
+      const ce = [eye[0] + M[0] * 0.03, eye[1] + M[1] * 0.03, eye[2] + M[2] * 0.03];
+      const MC = lookAt(ce, center);
+      const rgba = renderColor(scene, MC, PC, 64, 48);
+      vol.integrate({ width: 96, height: 96, depth: renderDepth(scene, M, P, 96, 96), proj: P, camToWorld: M },
+        { width: 64, height: 48, rgba, proj: PC, camToWorld: MC });
+    }
+  }
+  const mesh = vol.extractMesh({ minWeight: 1 });
+  let good = 0, n = 0;
+  for (let v = 0; v < mesh.positions.length / 3; v++) {
+    const dy = mesh.positions[v * 3 + 1] - center[1];
+    if (Math.abs(dy) < 0.015) continue; // equator: mixed colors are expected
+    const red = mesh.colors[v * 3] > mesh.colors[v * 3 + 2];
+    if (red === dy > 0) good++;
+    n++;
+  }
+  check('Farbfusion: Farben am richtigen Ort', good / n > 0.97, `${(good / n * 100).toFixed(1)} % korrekt, ${mesh.colors.length / 3} Vertices`);
+  const dec = ops.decimateToTarget(ops.taubinSmooth(mesh, 2), 2000);
+  check('Farben überleben Glätten/Dezimieren', dec.colors && dec.colors.length === dec.positions.length);
+  const ply = toPLY(toCadSpace(dec, {}));
+  writeFileSync(new URL('color.ply', outDir), Buffer.from(ply));
+  const step = toSTEP([{ name: 'Scan', mesh: toCadSpace(dec, {}) }, { name: 'Marker', color: [255, 80, 140], mesh: cylinder([0, 0, 0], [0, 0, 10], 2, 12) }], { name: 'Farbe' });
+  writeFileSync(new URL('color.step', outDir), step);
+  check('STEP mit Farben', step.includes('COLOUR_RGB') && step.includes('MECHANICAL_DESIGN_GEOMETRIC_PRESENTATION_REPRESENTATION'));
 }
 
 console.log(failed ? `\n${failed} Test(s) fehlgeschlagen` : '\nAlle Tests bestanden');

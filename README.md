@@ -13,12 +13,15 @@ Die App läuft direkt im **Quest-Browser** und wird nicht installiert: kein Side
 | **Raum** | ganzes Zimmer | 30 mm | Zimmer als Modell, zusätzlich mit dem Raum-Mesh der Quest (Space Setup) |
 
 - **Live-Vorschau:** Die bereits erfasste Oberfläche wird farbig über die echte Welt gelegt, so siehst du sofort, wo noch Lücken sind.
+- **Farbe (optional):** Mit einer Kamera der Quest werden die echten Farben mit aufgenommen und pro Punkt gemittelt. Siehe [Farbe](#farbe).
 - **Messwerkzeuge mit der Controllerspitze:** Punkt, Abstand, **Kreis/Ø** (z. B. Kleiderstange: 3+ Punkte rundherum → Durchmesser + Achse) und **Ebene** (z. B. Wand, Tischplatte). Das Controller-Tracking ist deutlich genauer als die Tiefenkamera, darum ist das der Weg für exakte Maße.
 - **Spitzen-Kalibrierung** (Pivot-Kalibrierung, wie bei Messarmen): Der Messpunkt sitzt danach auf ~1 mm genau an der Controllerspitze.
 - **Export** in Millimetern, Z nach oben:
   - **STL** (binär): Standard für Mesh-Import und 3D-Druck
   - **STEP** (AP214, facettierte Flächen): öffnet sich als Flächenkörper im CAD, automatisch auf max. N Dreiecke reduziert
-  - **OBJ** mit getrennten Objekten (Scan / Raum-Mesh / Messungen)
+  - **OBJ** mit getrennten Objekten (Scan / Raum-Mesh / Messungen) und Vertex-Farben
+  - **PLY** mit Vertex-Farben (MeshLab, Blender, CloudCompare)
+  - STEP enthält die Farben als Flächenfarben (Fusion 360 zeigt sie an)
   - **CSV-Messprotokoll** (Excel-tauglich, deutsches Format)
 - **Aufbereitung beim Export:** Glätten (Taubin, ohne Schrumpfen), Rauschinseln entfernen, Tischauflage abschneiden, **Raum automatisch an den Wänden ausrichten** (Wände parallel zu X/Y).
 - Scans werden **auf der Quest gespeichert** (IndexedDB) und können später erneut mit anderen Einstellungen exportiert werden.
@@ -29,9 +32,8 @@ Die App läuft direkt im **Quest-Browser** und wird nicht installiert: kein Side
 WebXR braucht **https://**. Drei Möglichkeiten, von einfach bis „ohne GitHub“:
 
 ### A) GitHub Pages (empfohlen, einmal einrichten)
-1. Repo auf GitHub → **Settings → Pages → Source: „GitHub Actions“**.
-   *Bei einem privaten Repo geht Pages nur mit GitHub Pro. Alternativ das Repo öffentlich machen (es enthält keine persönlichen Daten).*
-2. Nach dem nächsten Push auf `main` läuft der Workflow „Pages“ und die App ist unter `https://vale0708.github.io/Meta-quest-3s-3d-scanner/` erreichbar.
+1. Repo auf GitHub → **Settings → Pages → Build and deployment → Source: „GitHub Actions“** (nur einmal nötig, das Repo muss öffentlich sein).
+2. Nach jedem Push auf `main` läuft der Workflow „Pages“ und die App ist unter `https://vale0708.github.io/Meta-quest-3s-3d-scanner/` erreichbar.
 3. URL im Quest-Browser öffnen (Tipp: als Lesezeichen speichern).
 
 ### B) Lokal vom PC im WLAN
@@ -68,6 +70,18 @@ Der Server zeigt eine Adresse wie `https://192.168.x.x:8443`. Öffne sie im Ques
 2. In der Raummitte starten, **A**, dann langsam alle Wände, Ecken, Boden und Decke abschauen, für Details auch näher rangehen.
 3. Wichtige Maße zusätzlich mit dem **Messwerkzeug** antasten, z. B. Kleiderstange mit *Kreis/Ø* (3–6 Punkte rundherum, dann „Messung fertig“) und die Wandhalter mit *Punkt*.
 
+## Farbe
+
+1. Auf der Startseite **„Kamera testen“** drücken und den Kamerazugriff erlauben. Erscheint ein Live-Bild der Umgebung, kann der Browser Farbe liefern. Bei mehreren Kameras die linke/vordere auswählen.
+2. **„Farbe aufnehmen“** anhaken und den Scan starten.
+3. In VR **erst kurz scannen**, dann **„Farbe ausrichten“**: Das Kamerabild wird live auf die Vorschau projiziert.
+   - Rechter Stick: drehen (links/rechts) und kippen (hoch/runter)
+   - Linker Stick: Sichtfeld (FOV) anpassen
+   - So lange anpassen, bis Kanten und Muster im projizierten Bild genau auf den echten Kanten liegen, dann **„Ausrichten fertig“**. Die Einstellung bleibt gespeichert, das musst du nur einmal machen.
+4. Weiter scannen. Langsame Bewegungen geben schärfere Farben.
+
+**Ehrlicher Hinweis:** Meta gibt die Passthrough-Kameras nur nativen Apps offiziell frei (Passthrough Camera API). Ob der Quest-Browser sie über `getUserMedia` herausgibt, hängt von der Browser-Version ab. Das zeigt dir der Kamera-Test sofort. Klappt es nicht, funktioniert der Scan trotzdem, nur ohne Farbe. Dann wäre eine native Unity-App der nächste Schritt.
+
 **Koordinatensystem im Export:** Millimeter, Z oben. Bei Objekten liegt der Nullpunkt in der Mitte der Box-Unterseite (also auf der Tischplatte). Beim Raum liegt er auf dem Boden unter der Startposition, und die Achsen sind auf Wunsch parallel zu den Wänden.
 
 **Dateien auf den PC bringen:** Exporte landen im Download-Ordner der Quest. Wege von dort auf den PC:
@@ -86,8 +100,13 @@ Die Quest 3S hat **keinen** Tiefensensor (ToF). Die Tiefe wird aus den Tracking-
 **Empfohlener Workflow für ein Passteil (z. B. Halter für die Kleiderstange):**
 Raum oder Umgebung grob scannen und dabei die *funktionalen Maße antasten* (Stangen-Ø und -Achse, Wandebene, Abstände). Im CAD dient der Scan dann als Referenz-Mesh, die Messungen kommen exakt aus dem CSV bzw. als Zylinder/Ebene im Export.
 
-**CAD-Import-Tipps**
-- **Fusion 360:** Einfügen → Netz einfügen (STL/OBJ). STEP wird als Flächenkörper geöffnet. Für Volumenkörper: Netz → In BRep umwandeln (bei wenigen Dreiecken).
+**Fusion 360**
+- **Als Referenz (empfohlen):** *Einfügen → Netz einfügen* mit STL oder OBJ, Einheit **Millimeter**. Das Netz liegt dann als Referenzkörper im Modell, daran kannst du skizzieren, z. B. über *Netz → Schnittskizze erstellen*.
+- **STEP:** *Datei → Öffnen* bzw. *Hochladen*. Wird als Flächenkörper mit den Scan-Farben geöffnet. STEP-Limit klein halten (Standard 15 000 Dreiecke), sonst wird Fusion sehr langsam.
+- **Volumenkörper aus dem Netz:** *Netz → Reparieren*, dann *Netz → In BRep umwandeln*. Das klappt nur bei geschlossenen Netzen mit wenigen Dreiecken. Für Passteile ist es meist besser, die Geometrie anhand der Messwerte (CSV) neu zu skizzieren.
+- Die exportierten **Messungen** (Zylinder für Ø, Platten für Ebenen, Marker für Punkte) liegen exakt an den angetasteten Stellen und eignen sich gut als Bezug für Skizzen.
+
+**Andere CAD-Programme**
 - **SolidWorks:** STL öffnen → Optionen „Importieren als: Grafikkörper“ (schnell) oder „Volumenkörper/Flächenkörper“ (nur bei wenigen Dreiecken). STEP geht direkt.
 - **FreeCAD:** STEP öffnen (Part-Workbench) oder STL → Mesh-Workbench.
 - Bei STEP das Limit „max. Dreiecke“ klein halten (10–30 Tsd.), sonst wird das CAD sehr langsam.
@@ -103,7 +122,8 @@ Raum oder Umgebung grob scannen und dabei die *funktionalen Maße antasten* (Sta
 - `js/xr/` – WebXR-Session (`immersive-ar` mit Passthrough), Depth-API-Auslesen (GPU-Pfad: Tiefentextur → Shader → asynchrones PBO-Readback; CPU-Pfad als Fallback), Controller, VR-Menü
 - `js/fusion/` – sparse **TSDF**-Volumen (Voxel-Hashing) und Marching Cubes in einem Web Worker, automatische Erkennung der Tiefenbild-Orientierung
 - `js/mesh/`, `js/measure.js` – Mesh-Operationen (Taubin, Komponentenfilter, Vertex-Clustering), Kreis-/Ebenen-Fit, Pivot-Kalibrierung
-- `js/export/` – STL-, STEP-, OBJ- und CSV-Writer
+- `js/export/` – STL-, STEP- (mit Flächenfarben), OBJ-, PLY- und CSV-Writer
+- `js/xr/color-camera.js` – Kamera per getUserMedia, Kameramodell (FOV, Versatz, Drehung), Zuordnung der Kopfpose zum Aufnahmezeitpunkt
 - `js/sim/` – synthetische Tiefenkamera für Simulation und Tests
 - `vendor/three/` – three.js r180 (MIT), lokal eingebunden, läuft also auch offline
 

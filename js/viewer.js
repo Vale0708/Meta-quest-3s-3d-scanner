@@ -46,8 +46,11 @@ export class Viewer {
       g.setIndex(new THREE.BufferAttribute(p.mesh.indices, 1));
       g.computeVertexNormals();
       const transparent = p.name === 'Quest-Raum-Mesh' || p.name === 'Raumflaechen';
+      const vc = !!p.mesh.colors;
+      if (vc) g.setAttribute('color', new THREE.BufferAttribute(p.mesh.colors, 3, true));
       const m = new THREE.Mesh(g, new THREE.MeshStandardMaterial({
-        color: COLORS[p.name] ?? 0xcccccc, roughness: 0.8, side: dollhouse && p.name !== 'Messungen' ? THREE.FrontSide : THREE.DoubleSide,
+        color: vc ? 0xffffff : COLORS[p.name] ?? 0xcccccc, vertexColors: vc,
+        roughness: 0.8, side: dollhouse && p.name !== 'Messungen' ? THREE.FrontSide : THREE.DoubleSide,
         transparent, opacity: transparent ? 0.45 : 1, depthWrite: !transparent,
       }));
       m.name = p.name;
