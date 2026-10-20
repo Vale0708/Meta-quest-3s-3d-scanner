@@ -1,6 +1,7 @@
-# Publishes the app via GitHub Pages (https://<user>.github.io/<repo>/).
-# One-time setup: Settings → Pages → Source: "GitHub Actions".
-# For private repos, GitHub Pages requires a paid plan.
+# Publishes the app via GitHub Pages (https://<user>.github.io/<repo>/):
+# after the tests, the site files are pushed to the gh-pages branch.
+# If Pages does not turn on by itself: Settings → Pages → Source:
+# "Deploy from a branch", branch gh-pages, folder / (root).
 name: Pages
 
 on:
@@ -9,16 +10,14 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
-  pages: write
-  id-token: write
+  contents: write
 
 concurrency:
   group: pages
   cancel-in-progress: true
 
 jobs:
-  test:
+  deploy:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -26,19 +25,15 @@ jobs:
         with:
           node-version: 22
       - run: node test/run-tests.mjs && node test/orientation-test.mjs
-
-  deploy:
-    needs: test
-    runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - uses: actions/checkout@v4
-      - name: Bundle site
-        run: mkdir _site && cp -r index.html manifest.webmanifest icon.svg css js vendor _site/
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: _site
-      - id: deployment
-        uses: actions/deploy-pages@v4
+      - name: Push site to gh-pages
+        run: |
+          mkdir _site
+          cp -r index.html manifest.webmanifest icon.svg css js vendor _site/
+          touch _site/.nojekyll
+          cd _site
+          git init -q -b gh-pages
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -q -m "Deploy ${GITHUB_SHA}"
+          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${GITHUB_REPOSITORY}.git" gh-pages

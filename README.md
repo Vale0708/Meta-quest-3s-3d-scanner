@@ -31,10 +31,10 @@ Die App läuft direkt im **Quest-Browser** und wird nicht installiert: kein Side
 
 WebXR braucht **https://**. Drei Möglichkeiten, von einfach bis „ohne GitHub“:
 
-### A) GitHub Pages (empfohlen, einmal einrichten)
-1. Repo auf GitHub → **Settings → Pages → Build and deployment → Source: „GitHub Actions“** (nur einmal nötig, das Repo muss öffentlich sein).
-2. Nach jedem Push auf `main` läuft der Workflow „Pages“ und die App ist unter `https://vale0708.github.io/Meta-quest-3s-3d-scanner/` erreichbar.
-3. URL im Quest-Browser öffnen (Tipp: als Lesezeichen speichern).
+### A) GitHub Pages (empfohlen)
+Die App ist unter **https://vale0708.github.io/Meta-quest-3s-3d-scanner/** erreichbar. Nach jedem Push auf `main` testet der Workflow „Pages“ den Code und veröffentlicht ihn automatisch über den Branch `gh-pages`.
+Falls die Seite nicht erreichbar ist: **Settings → Pages → Source: „Deploy from a branch“**, Branch `gh-pages`, Ordner `/ (root)`.
+URL im Quest-Browser öffnen (Tipp: als Lesezeichen speichern).
 
 ### B) Lokal vom PC im WLAN
 Voraussetzung: [Node.js](https://nodejs.org) ab Version 18.
