@@ -1,0 +1,62 @@
+:root {
+  --bg: #0e1116; --panel: #171c24; --panel2: #1f2631; --text: #e6ebf2; --muted: #9aa5b5;
+  --accent: #7ee0b0; --accent2: #4cc9f0; --warn: #ffb86b; --danger: #e5484d; --radius: 14px;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+header { padding: 24px 16px 8px; max-width: 1100px; margin: 0 auto; }
+h1 { margin: 0; font-size: 28px; color: var(--accent); }
+h2 { font-size: 20px; margin: 0 0 12px; }
+.sub { margin: 4px 0 12px; color: var(--muted); }
+main { max-width: 1100px; margin: 0 auto; padding: 0 16px 48px; display: grid; gap: 20px; }
+section { background: var(--panel); border-radius: var(--radius); padding: 18px; }
+.support { padding: 10px 14px; border-radius: 10px; background: var(--panel2); font-size: 14px; }
+.support.ok { border-left: 4px solid var(--accent); }
+.support.no { border-left: 4px solid var(--warn); }
+.modes { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
+.mode { background: var(--panel2); border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 8px; }
+.mode h3 { margin: 0; font-size: 18px; }
+.mode p { margin: 0; color: var(--muted); font-size: 14px; flex: 1; }
+.mode .meta { font-size: 12px; color: var(--muted); }
+.mode .row { display: flex; gap: 8px; }
+button { font: inherit; border: 0; border-radius: 10px; padding: 10px 16px; background: #2e3646; color: var(--text); cursor: pointer; min-height: 44px; }
+button:hover:not(:disabled) { background: #3d475b; }
+button:disabled { opacity: .45; cursor: default; }
+button.primary { background: #2f8f63; }
+button.primary:hover:not(:disabled) { background: #37a673; }
+button.danger { background: #6d2a30; }
+button.small { padding: 6px 12px; min-height: 34px; font-size: 14px; }
+button.active { background: #2f8f63; }
+.settings { margin-top: 14px; }
+.settings label { display: block; margin: 8px 0; }
+select, input[type=number], input.name { font: inherit; background: var(--panel2); color: var(--text); border: 1px solid #334; border-radius: 8px; padding: 6px 10px; }
+.hint { color: var(--muted); font-size: 14px; }
+.diag { color: var(--muted); font-size: 13px; white-space: pre-wrap; }
+.list { display: grid; gap: 10px; }
+.item { display: flex; gap: 12px; align-items: center; background: var(--panel2); border-radius: 10px; padding: 10px 14px; flex-wrap: wrap; }
+.item .info { flex: 1; min-width: 180px; }
+.item .info b { display: block; }
+.item .info span { color: var(--muted); font-size: 13px; }
+.detail-head { display: flex; gap: 10px; margin-bottom: 10px; }
+.detail-head .name { flex: 1; min-width: 0; font-size: 18px; }
+.viewer { height: min(60vh, 520px); border-radius: 10px; overflow: hidden; background: #12161d; touch-action: none; }
+.export { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; margin-top: 12px; }
+fieldset { border: 1px solid #2a3240; border-radius: 10px; }
+fieldset label { display: block; margin: 4px 0; }
+.export .buttons { display: flex; flex-wrap: wrap; gap: 8px; align-content: start; }
+table { width: 100%; border-collapse: collapse; font-size: 14px; margin-top: 12px; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #2a3240; }
+.help ol { padding-left: 20px; }
+.help li { margin-bottom: 6px; }
+.toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: #24303f; padding: 12px 18px; border-radius: 10px; box-shadow: 0 6px 24px #0008; max-width: calc(100% - 32px); z-index: 20; }
+.simstage { position: fixed; inset: 0; background: #000; z-index: 10; }
+.sim-ui { position: absolute; left: 12px; top: 12px; width: min(360px, calc(100% - 24px)); background: rgba(18,22,30,.9); border-radius: 12px; padding: 12px; display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.sim-ui .sim-lines { grid-column: 1 / -1; font-size: 13px; color: var(--muted); }
+.sim-ui .sim-lines .warn { color: var(--warn); }
+.sim-ui button { font-size: 13px; padding: 6px 8px; min-height: 36px; }
+.sim-ui button[data-id=finish] { grid-column: 1 / -1; }
+.colorbox { margin-top: 14px; background: var(--panel2); border-radius: 12px; padding: 12px 14px; }
+.colorbox .big { font-weight: 600; }
+.colorbox .row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+.campreview { width: 100%; max-width: 360px; border-radius: 8px; margin-top: 8px; background: #000; }
+.version { margin: 8px 0 0; color: var(--muted); font-size: 13px; }
