@@ -67,8 +67,11 @@ export async function startXR(o) {
   const videoTex = colorCam ? new THREE.VideoTexture(colorCam.video) : null;
 
   let saved = false;
-  const features = session.enabledFeatures || [];
-  const diag = { features: [...features], depthUsage: null, depthFormat: null, color: colorCam ? colorCam.label || 'ja' : (o.color ? 'Fehler: ' + colorError : 'aus') };
+  // Not every browser reports enabledFeatures – then simply try the depth.
+  const featuresKnown = !!session.enabledFeatures;
+  const features = session.enabledFeatures ? [...session.enabledFeatures] : [];
+  let tryDepth = featuresKnown ? features.includes('depth-sensing') : true;
+  const diag = { features: featuresKnown ? features : ['(unbekannt)'], depthUsage: null, depthFormat: null, color: colorCam ? colorCam.label || 'ja' : (o.color ? 'Fehler: ' + colorError : 'aus') };
 
   const app = new ScanApp({
     scene,
@@ -81,12 +84,21 @@ export async function startXR(o) {
   });
   if (o.color && !colorCam) app.message = '!Kamera nicht verfügbar: ' + colorError.slice(0, 40);
   window.__scanApp = app; // for debugging in the browser console
-  if (features.length && !features.includes('depth-sensing')) app.message = '!Depth API nicht verfügbar – nur Messen/Raum-Mesh';
+  if (!tryDepth) app.message = '!Browser hat die Depth API nicht freigegeben';
 
   await renderer.xr.setSession(session);
   const perf = new PerfGovernor(session.frameRate || 72);
   app.perf = perf;
   const depthReader = new DepthReader(renderer, { maxSize: o.mode.id === 'small' ? 192 : 160 });
+  // diagnosis for the "Mehr …" page of the VR menu
+  app.diagLines = () => {
+    const d = depthReader.info;
+    return [
+      `Features: ${diag.features.join(', ') || '–'}`,
+      `Tiefe: ${tryDepth ? 'aktiv' : 'aus'} · ${session.depthUsage ?? '?'} / ${session.depthDataFormat ?? '?'} · ${d.frames} Bilder${d.size ? ' · ' + d.size : ''}`,
+      ...(d.lastError ? [`!Fehler (${d.errors}×): ${d.lastError}`] : []),
+    ];
+  };
 
   // ---------------------------------------------------- controllers
   const tipOffset = new THREE.Vector3().fromArray(loadTipOffset());
@@ -127,7 +139,7 @@ export async function startXR(o) {
     if (viewer) poses.push(now, viewer.transform.matrix);
 
     // ---- depth (+ color)
-    if (frame && features.includes('depth-sensing')) {
+    if (frame && tryDepth) {
       const pose = viewer;
       if (pose && pose.views.length && frameNo % perf.depthEvery === 0 && !app.fusion.busy) {
         depthReader.capture(frame, pose.views[0], session);
@@ -143,6 +155,11 @@ export async function startXR(o) {
       }
       diag.depthUsage = session.depthUsage;
       diag.depthFormat = session.depthDataFormat;
+      // without a single depth image after many attempts: give up (saves time per frame)
+      if (!featuresKnown && depthReader.info.frames === 0 && depthReader.info.errors > 120) {
+        tryDepth = false;
+        app.message = '!Browser liefert keine Tiefendaten: ' + (depthReader.info.lastError || '').slice(0, 60);
+      }
     }
 
     // ---- room mesh / planes
