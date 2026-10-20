@@ -6,6 +6,7 @@ import { Panel, makeLabel } from './panel.js';
 import { evaluateMeasurement, describeMeasurement, robustPivotCalibration } from '../measure.js';
 import { saveModel } from './color-camera.js';
 import { versionText } from '../version.js';
+import { loadTip, saveTip, nudgeTip, describeTip } from './tip.js';
 
 // Projects the live camera image onto the preview (to align the color camera).
 const PROJ_VS = `
@@ -50,7 +51,9 @@ const HELP = {
   't-plane': 'Ebene + Ebenheit, z. B. Wand oder Tischplatte',
   mdone: 'Schließt Kreis/Ebene mit den bisherigen Punkten ab',
   undo: 'Letzten Punkt bzw. letzte Messung löschen (auch Taste B)',
-  calib: 'Lernt, wo genau die Messspitze am Controller sitzt (einmalig)',
+  calib: 'Optional: echte Spitze am Controller einmessen statt schwebender Spitze',
+  tipnear: 'Schwebende Spitze 1 cm näher an den Controller',
+  tipfar: 'Schwebende Spitze 1 cm weiter weg vom Controller',
   colorcal: 'Kamerabild an der echten Welt ausrichten (für Farbe)',
   room: 'Startet die Raumerfassung der Quest selbst – optional, liefert ein grobes Zusatz-Raster',
   reset: 'Verwirft alles bisher Gescannte (Messungen bleiben)',
@@ -85,6 +88,8 @@ export class ScanApp {
     this.measurements = [];
     this.calibPoses = [];
     this.tipWorld = new THREE.Vector3();
+    this.tipBase = new THREE.Vector3(); // controller position (set by the VR driver)
+    this.tip = loadTip();
     this.sceneMeshes = new Map(); // XRMesh → {label, positions, indices}
     this.planes = new Map();
     this.depthOk = false;
@@ -130,10 +135,14 @@ export class ScanApp {
     }
 
     // probe tip
-    this.tipMarker = new THREE.Mesh(new THREE.SphereGeometry(0.003, 16, 12), new THREE.MeshBasicMaterial({ color: 0xff3366, depthTest: false }));
+    // probe tip: small solid core = the measured point, translucent halo for visibility
+    this.tipMarker = new THREE.Mesh(new THREE.SphereGeometry(0.0025, 16, 12), new THREE.MeshBasicMaterial({ color: 0xff3366, depthTest: false }));
     this.tipMarker.renderOrder = 12;
     this.root.add(this.tipMarker);
-    this.tipCross = new THREE.AxesHelper(0.015);
+    const halo = new THREE.Mesh(new THREE.SphereGeometry(0.007, 16, 12), new THREE.MeshBasicMaterial({ color: 0xff3366, transparent: true, opacity: 0.25, depthTest: false, depthWrite: false }));
+    halo.renderOrder = 11;
+    this.tipMarker.add(halo);
+    this.tipCross = new THREE.AxesHelper(0.012);
     this.tipMarker.add(this.tipCross);
 
     this.measureGroup = new THREE.Group();
@@ -144,6 +153,8 @@ export class ScanApp {
     this.panel = new Panel(0.24);
     this.root.add(this.panel.mesh);
   }
+
+  get tipVisible() { return this.tool !== 'none' || this.phase === 'place'; }
 
   // ---------------------------------------------------------------- frames
 
@@ -166,7 +177,7 @@ export class ScanApp {
       this.boxLines.material.color.set(this.phase === 'place' ? 0xffd166 : 0x4cc9f0);
     }
     this.tipMarker.position.copy(this.tipWorld);
-    this.tipMarker.visible = this.tool !== 'none' || this.phase === 'place';
+    this.tipMarker.visible = this.tipVisible;
 
     // live preview
     if (this.preview && !this.previewBusy && now - this.previewAt > (this.mode.id === 'room' ? 2500 : 1200) * (this.perf?.previewFactor ?? 1) && this.fusion.stats.blocks > 0 &&
@@ -331,6 +342,8 @@ export class ScanApp {
     if (!r) { this.message = '!Zu kurz – Trigger länger gedrückt halten'; return null; }
     if (r.coverage < 0.6) { this.message = `!Zu wenig gekippt (${Math.round(r.coverage * 100)} %) – stärker in alle Richtungen kippen`; return null; }
     if (r.rms > 0.003) { this.message = `!Ungenau (±${(r.rms * 1000).toFixed(1)} mm) – Spitze ist verrutscht, nochmal`; return null; }
+    this.tip = { ...this.tip, mode: 'calibrated', calib: r.tip };
+    saveTip(this.tip);
     this.message = `Spitze kalibriert (±${(r.rms * 1000).toFixed(1)} mm, ${r.used}/${r.total} Messungen)`;
     this.tool = 'none';
     this.page = 'measure';
@@ -418,6 +431,11 @@ export class ScanApp {
       case 'undo': this.undo(); break;
       case 'colorcal': this.toggleColorCal(); break;
       case 'calib': this.page = 'calib'; this.setTool('calibrate'); break;
+      case 'tipnear': case 'tipfar':
+        this.tip = nudgeTip(this.tip, id === 'tipnear' ? -0.01 : 0.01);
+        saveTip(this.tip);
+        this.message = 'Spitze: ' + describeTip(this.tip);
+        break;
       case 'calibback': this.setTool('none'); this.page = 'measure'; break;
       case 'room': this.caps.roomCapture?.().catch((e) => { this.message = '!' + e.message; }); break;
       case 'reset': this.reset(); this.page = 'main'; break;
@@ -437,7 +455,7 @@ export class ScanApp {
   _step() {
     const box = !!this.box;
     if (this.phase === 'saving') return 'Speichere … bitte warten';
-    if (this.phase === 'place') return 'Schritt 1/3: Rote Spitze auf die Tischplatte neben das Objekt halten, Trigger drücken';
+    if (this.phase === 'place') return 'Schritt 1/3: Roten Punkt vor dem Controller auf die Tischplatte neben das Objekt setzen, Trigger drücken';
     if (this.phase === 'ready') return `Schritt ${box ? 2 : 1}/${box ? 3 : 2}: A drücken (oder ▶ Scannen) und langsam umhergehen`;
     if (this.phase === 'paused') return 'Pausiert – A zum Weiterscannen, oder ✔ Fertig';
     if (this.fusion.stats.blocks === 0) return 'Scannt … Kopf langsam bewegen';
@@ -469,10 +487,13 @@ export class ScanApp {
       title = 'Messen';
       lines.push(this.tool !== 'none' && TOOL_HINTS[this.tool] ? `${TOOL_NAMES[this.tool]}: ${TOOL_HINTS[this.tool]}` : 'Werkzeug wählen');
       lines.push(`Punkte: ${this.points.length} · Messungen: ${this.measurements.length}`);
+      lines.push('Spitze: ' + describeTip(this.tip));
       for (const t of ['point', 'distance', 'circle', 'plane']) b.push({ id: 't-' + t, label: TOOL_NAMES[t], active: this.tool === t });
       b.push({ id: 'mdone', label: 'Fertig (Kreis/Ebene)', disabled: !(this.tool === 'circle' || this.tool === 'plane') || this.points.length < 3 });
       b.push({ id: 'undo', label: 'Rückgängig (B)' });
-      b.push({ id: 'calib', label: 'Spitze kalibrieren', wide: true });
+      b.push({ id: 'tipnear', label: 'Spitze näher' });
+      b.push({ id: 'tipfar', label: 'Spitze weiter' });
+      b.push({ id: 'calib', label: 'Echte Spitze kalibrieren (optional)', wide: true });
       b.push({ id: 'back', label: '← Zurück', wide: true });
     } else if (this.page === 'calib') {
       title = 'Spitze kalibrieren';

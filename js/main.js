@@ -1,6 +1,7 @@
 // Start page: mode selection, saved scans, viewer and export.
 import { MODES, modeConfig } from './modes.js';
-import { isARSupported, startXR, loadTipOffset } from './xr/xr-driver.js';
+import { isARSupported, startXR } from './xr/xr-driver.js';
+import { loadTip, describeTip } from './xr/tip.js';
 import { saveScan, listScans, getScan, deleteScan } from './storage.js';
 import { buildParts, exportFile, DEFAULT_OPTIONS } from './export/pipeline.js';
 import { Viewer } from './viewer.js';
@@ -231,8 +232,7 @@ async function init() {
   try { $('#color').checked = localStorage.getItem('quest-scanner-color') === '1'; } catch { /* ignore */ }
   $('#color').addEventListener('change', storeColorPref);
   $('#camdev').addEventListener('change', () => { saveDeviceId($('#camdev').value); cameraTest(); });
-  const tip = loadTipOffset();
-  $('#tipinfo').textContent = tip.some((v) => v) ? `kalibriert (${tip.map((v) => (v * 1000).toFixed(1)).join(' / ')} mm)` : 'nicht kalibriert (Standard: Strahl-Ursprung)';
+  $('#tipinfo').textContent = describeTip(loadTip());
   try { showDiag(JSON.parse(localStorage.getItem('quest-scanner-diag'))); } catch { /* ignore */ }
   await refreshList();
 
@@ -250,7 +250,10 @@ async function init() {
     } else if (t.dataset.fmt) doExport(t.dataset.fmt);
     else if (t.id === 'close') { current = null; $('#detail').hidden = true; }
     else if (t.id === 'camtest') cameraTest();
-    else if (t.id === 'tipreset') { localStorage.removeItem('quest-scanner-tip-offset'); $('#tipinfo').textContent = 'zurückgesetzt'; }
+    else if (t.id === 'tipreset') {
+      try { localStorage.removeItem('quest-scanner-tip'); localStorage.removeItem('quest-scanner-tip-offset'); } catch { /* ignore */ }
+      $('#tipinfo').textContent = describeTip(loadTip());
+    }
   });
   $('#detail').addEventListener('input', (e) => {
     if (e.target.id === 'o-smooth') $('#o-smooth-v').textContent = e.target.value;

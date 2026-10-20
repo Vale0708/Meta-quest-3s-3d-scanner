@@ -32,6 +32,7 @@ jobs:
           touch _site/.nojekyll
           VERSION="$(TZ=Europe/Berlin date '+%d.%m.%Y %H:%M') · ${GITHUB_SHA::7}"
           sed -i "s/__VERSION__/${VERSION}/" _site/js/version.js
+          node tools/stamp.mjs _site "${GITHUB_SHA::7}"
           cd _site
           git init -q -b gh-pages
           git config user.name "github-actions[bot]"

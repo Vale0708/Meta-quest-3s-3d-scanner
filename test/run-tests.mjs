@@ -11,6 +11,7 @@ import { perspective, lookAt, renderDepth, renderColor, mulberry32 } from '../js
 import { toPLY } from '../js/export/ply.js';
 import { toCadSpace } from '../js/mesh/cad.js';
 import { dominantYaw } from '../js/export/pipeline.js';
+import { loadTip, tipOffset, nudgeTip, TIP_DEFAULT, TIP_MIN } from '../js/xr/tip.js';
 
 let failed = 0;
 function check(name, cond, info = '') {
@@ -249,6 +250,17 @@ mkdirSync(outDir, { recursive: true });
   const step = toSTEP([{ name: 'Scan', mesh: toCadSpace(dec, {}) }, { name: 'Marker', color: [255, 80, 140], mesh: cylinder([0, 0, 0], [0, 0, 10], 2, 12) }], { name: 'Farbe' });
   writeFileSync(new URL('color.step', outDir), step);
   check('STEP mit Farben', step.includes('COLOUR_RGB') && step.includes('MECHANICAL_DESIGN_GEOMETRIC_PRESENTATION_REPRESENTATION'));
+}
+
+// ---- floating measuring tip
+{
+  const t = loadTip(); // no localStorage in Node → defaults
+  check('Spitze: Standard schwebend vor dem Controller', t.mode === 'float' && tipOffset(t)[2] === -TIP_DEFAULT && tipOffset(t)[0] === 0);
+  let n = t;
+  for (let i = 0; i < 20; i++) n = nudgeTip(n, -0.01);
+  check('Spitze: Abstand begrenzt', n.dist === TIP_MIN);
+  const c = { mode: 'calibrated', dist: 0.07, calib: [0.001, -0.02, 0.03] };
+  check('Spitze: kalibriert nutzt Offset, näher/weiter schaltet zurück', tipOffset(c)[1] === -0.02 && nudgeTip(c, 0.01).mode === 'float' && Math.abs(nudgeTip(c, 0.01).dist - 0.08) < 1e-9);
 }
 
 console.log(failed ? `\n${failed} Test(s) fehlgeschlagen` : '\nAlle Tests bestanden');

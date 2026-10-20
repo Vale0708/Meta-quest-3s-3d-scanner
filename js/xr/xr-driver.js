@@ -3,21 +3,8 @@ import * as THREE from 'three';
 import { ScanApp } from './scan-app.js';
 import { DepthReader } from './depth-reader.js';
 import { PerfGovernor } from './perf.js';
+import { tipOffset } from './tip.js';
 import { ColorCamera, PoseHistory, cameraPose, projFromModel, mul4 } from './color-camera.js';
-
-const TIP_KEY = 'quest-scanner-tip-offset';
-
-export function loadTipOffset() {
-  try {
-    const v = JSON.parse(localStorage.getItem(TIP_KEY));
-    if (Array.isArray(v) && v.length === 3) return v;
-  } catch { /* storage unavailable */ }
-  return [0, 0, 0];
-}
-
-function saveTipOffset(v) {
-  try { localStorage.setItem(TIP_KEY, JSON.stringify(v)); } catch { /* ignore */ }
-}
 
 export async function isARSupported() {
   try { return !!navigator.xr && await navigator.xr.isSessionSupported('immersive-ar'); } catch { return false; }
@@ -38,7 +25,8 @@ export async function startXR(o) {
     optionalFeatures: ['depth-sensing', 'mesh-detection', 'plane-detection', 'hand-tracking'],
     depthSensing: {
       usagePreference: ['gpu-optimized', 'cpu-optimized'],
-      dataFormatPreference: ['float32', 'luminance-alpha'],
+      // the Quest Browser only offers 'unsigned-short' – without it the depth is not enabled at all
+      dataFormatPreference: ['unsigned-short', 'float32', 'luminance-alpha'],
     },
   };
   const session = await navigator.xr.requestSession('immersive-ar', sessionInit);
@@ -96,12 +84,13 @@ export async function startXR(o) {
     return [
       `Features: ${diag.features.join(', ') || '–'}`,
       `Tiefe: ${tryDepth ? 'aktiv' : 'aus'} · ${session.depthUsage ?? '?'} / ${session.depthDataFormat ?? '?'} · ${d.frames} Bilder${d.size ? ' · ' + d.size : ''}`,
+      ...(d.sampler ? [`Tiefe-Dekodierung: ${d.sampler} · ${d.decode}${d.median ? ` · Median ${d.median.toFixed(2)} m` : ''}${d.validRatio !== undefined ? ` · ${Math.round(d.validRatio * 100)} % gültig` : ''}`] : []),
       ...(d.lastError ? [`!Fehler (${d.errors}×): ${d.lastError}`] : []),
     ];
   };
 
   // ---------------------------------------------------- controllers
-  const tipOffset = new THREE.Vector3().fromArray(loadTipOffset());
+  const tipVec = new THREE.Vector3();
   const ctrls = [0, 1].map((i) => {
     const c = renderer.xr.getController(i);
     c.userData.prev = {};
@@ -156,7 +145,7 @@ export async function startXR(o) {
       diag.depthUsage = session.depthUsage;
       diag.depthFormat = session.depthDataFormat;
       // without a single depth image after many attempts: give up (saves time per frame)
-      if (!featuresKnown && depthReader.info.frames === 0 && depthReader.info.errors > 120) {
+      if (depthReader.info.frames === 0 && depthReader.info.errors > 120) {
         tryDepth = false;
         app.message = '!Browser liefert keine Tiefendaten: ' + (depthReader.info.lastError || '').slice(0, 60);
       }
@@ -172,14 +161,16 @@ export async function startXR(o) {
     const right = byHand('right') || ctrls[0];
     const left = byHand('left');
     right.updateMatrixWorld();
-    app.tipWorld.copy(tipOffset).applyMatrix4(right.matrixWorld);
+    app.tipWorld.copy(tipVec.fromArray(tipOffset(app.tip))).applyMatrix4(right.matrixWorld);
+    app.tipBase.setFromMatrixPosition(right.matrixWorld);
 
     tmpM.identity().extractRotation(right.matrixWorld);
     raycaster.ray.origin.setFromMatrixPosition(right.matrixWorld);
     raycaster.ray.direction.set(0, 0, -1).applyMatrix4(tmpM);
     const hit = app.panel.hit(raycaster);
     app.panel.setHover(hit?.id ?? null);
-    right.userData.ray.scale.z = hit?.onPanel ? hit.distance : 0.3;
+    // while measuring/placing, the ray ends at the floating tip (like a virtual stylus)
+    right.userData.ray.scale.z = hit?.onPanel ? hit.distance : app.tipVisible && app.tip.mode === 'float' ? app.tip.dist : 0.3;
     if (left) left.userData.ray.visible = false;
 
     const ud = right.userData;
@@ -192,8 +183,7 @@ export async function startXR(o) {
     if (ud.releaseEdge) {
       ud.releaseEdge = false;
       if (!ud.panelPress) {
-        const tip = app.calibrationEnd();
-        if (tip) { tipOffset.fromArray(tip); saveTipOffset(tip); }
+        app.calibrationEnd();
       }
       ud.panelPress = false;
     }
