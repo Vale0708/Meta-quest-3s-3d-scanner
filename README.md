@@ -14,8 +14,8 @@ Die App läuft direkt im **Quest-Browser** und wird nicht installiert: kein Side
 
 - **Live-Vorschau:** Die bereits erfasste Oberfläche wird farbig über die echte Welt gelegt, so siehst du sofort, wo noch Lücken sind.
 - **Farbe (optional):** Mit einer Kamera der Quest werden die echten Farben mit aufgenommen und pro Punkt gemittelt. Siehe [Farbe](#farbe).
-- **Messwerkzeuge mit der Controllerspitze:** Punkt, Abstand, **Kreis/Ø** (z. B. Kleiderstange: 3+ Punkte rundherum → Durchmesser + Achse) und **Ebene** (z. B. Wand, Tischplatte). Das Controller-Tracking ist deutlich genauer als die Tiefenkamera, darum ist das der Weg für exakte Maße.
-- **Spitzen-Kalibrierung** (Pivot-Kalibrierung, wie bei Messarmen): Der Messpunkt sitzt danach auf ~1 mm genau an der Controllerspitze.
+- **Messwerkzeuge mit der schwebenden Messspitze** (roter Punkt 7 cm vor dem Controller, in 1-cm-Schritten verstellbar): Punkt, Abstand, **Kreis/Ø** (z. B. Kleiderstange: 3+ Punkte rundherum → Durchmesser + Achse) und **Ebene** (z. B. Wand, Tischplatte). Das Controller-Tracking ist deutlich genauer als die Tiefenkamera, darum ist das der Weg für exakte Maße.
+- **Optional: Spitzen-Kalibrierung** (Pivot-Kalibrierung, wie bei Messarmen) für eine echte Spitze am Controller.
 - **Export** in Millimetern, Z nach oben:
   - **STL** (binär): Standard für Mesh-Import und 3D-Druck
   - **STEP** (AP214, facettierte Flächen): öffnet sich als Flächenkörper im CAD, automatisch auf max. N Dreiecke reduziert
@@ -61,7 +61,7 @@ Der Server zeigt eine Adresse wie `https://192.168.x.x:8443`. Öffne sie im Ques
 
 **Ablauf Objekt-Scan**
 1. Objekt frei auf einen Tisch stellen, Modus wählen, **In VR starten**.
-2. Die gelbe Box hängt an der roten Spitze. Spitze **neben dem Objekt auf die Tischplatte** halten und Trigger drücken: Die Box steht jetzt auf dem Tisch. Mit dem Stick die Größe anpassen, das Objekt muss ganz drin sein.
+2. Die gelbe Box hängt am roten Punkt vor dem Controller. Punkt **neben dem Objekt auf die Tischplatte** halten und Trigger drücken: Die Box steht jetzt auf dem Tisch. Mit dem Stick die Größe anpassen, das Objekt muss ganz drin sein.
 3. **A** drücken, dann langsam um das Objekt herumgehen und es auch schräg von oben ansehen. In den ersten Sekunden den Kopf einmal hoch/runter und links/rechts bewegen: Die App kalibriert dabei automatisch die Ausrichtung des Tiefenbilds.
 4. Wenn die Vorschau geschlossen aussieht: **Fertig & Speichern**. Danach öffnet sich auf der Startseite der Export.
 
@@ -94,7 +94,7 @@ Die Quest 3S hat **keinen** Tiefensensor (ToF). Die Tiefe wird aus den Tracking-
 
 - **Räume und Möbel:** gut brauchbar. Wände, Nischen, Möbelpositionen und Raumhöhe sollten auf ~1–2 cm stimmen (am echten Gerät noch nicht nachgemessen).
 - **Mittelgroße Objekte:** Form und Hüllmaße gut, feine Details (< 2 cm) verschwinden.
-- **Kleine Objekte:** grobe Form. Für Passteile reicht das meist nicht. Dafür ist das **Antasten mit der Controllerspitze** da (kalibriert ~1–2 mm).
+- **Kleine Objekte:** grobe Form. Für Passteile reicht das meist nicht. Dafür ist das **Antasten mit der Messspitze** da (~1–2 mm).
 - Glänzende, schwarze, durchsichtige oder sehr dünne Objekte erfasst die Tiefenschätzung schlecht.
 
 **Empfohlener Workflow für ein Passteil (z. B. Halter für die Kleiderstange):**

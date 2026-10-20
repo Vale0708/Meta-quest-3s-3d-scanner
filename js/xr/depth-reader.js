@@ -12,13 +12,17 @@ void main() {
   gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
 }`;
 
-function fragmentShader(isArray) {
+// isArray: texture-array vs. single texture. isUint: integer texture (R16UI, the WebXR
+// spec for 'unsigned-short') vs. normalized/float texture (float32, luminance-alpha, or a
+// 16-bit depth texture as the Quest Browser may hand out). A wrong sampler type makes the
+// draw fail with INVALID_OPERATION – captureTexture() then tries the next variant.
+function fragmentShader(isArray, isUint) {
+  const sampler = (isUint ? 'usampler' : 'sampler') + (isArray ? '2DArray' : '2D');
   return `#version 300 es
 precision highp float;
 precision highp int;
-precision highp sampler2D;
-precision highp sampler2DArray;
-uniform ${isArray ? 'sampler2DArray' : 'sampler2D'} uTex;
+precision highp ${sampler};
+uniform ${sampler} uTex;
 uniform int uLayer;
 uniform mat4 uUv;
 uniform vec2 uOutSize;
@@ -33,8 +37,10 @@ void main() {
   vec2 tuv = (uUv * vec4(uv, 0.0, 1.0)).xy;
   ivec2 size = textureSize(uTex, 0).xy;
   ivec2 px = clamp(ivec2(tuv * vec2(size)), ivec2(0), size - 1);
-  vec4 s = texelFetch(uTex, ${isArray ? 'ivec3(px, uLayer)' : 'px'}, 0);
-  float raw = uLA == 1 ? (s.r * 255.0 + s.a * 255.0 * 256.0) : s.r;
+  ${isUint ? 'uvec4' : 'vec4'} s = texelFetch(uTex, ${isArray ? 'ivec3(px, uLayer)' : 'px'}, 0);
+  float raw = ${isUint
+    ? '(uMode == 0 ? float(s.r) / 65535.0 : float(s.r))'
+    : '(uLA == 1 ? (s.r * 255.0 + s.a * 255.0 * 256.0) : s.r)'};
   float z;
   if (uMode == 0) {
     if (raw <= 0.0 || raw >= 1.0) { outColor = vec4(0.0); return; }
@@ -65,10 +71,15 @@ export class DepthReader {
     this.slots = [];
     this.info = { usage: null, format: null, frames: 0, errors: 0, lastError: null };
     this.ready = [];
+    this.variant = null;   // sampler variant that worked ({isArray, isUint})
+    this.tried = new Set();
+    this.decodeFlip = false; // swaps window depth ↔ raw × rawValueToMeters if the result is implausible
+    this.badFrames = 0;
+    this.flips = 0;
   }
 
-  _program(isArray) {
-    const key = isArray ? 'array' : 'tex';
+  _program(isArray, isUint) {
+    const key = (isArray ? 'array' : 'tex') + (isUint ? '-uint' : '');
     if (this.programs[key]) return this.programs[key];
     const gl = this.gl;
     const compile = (type, src) => {
@@ -80,7 +91,7 @@ export class DepthReader {
     };
     const p = gl.createProgram();
     gl.attachShader(p, compile(gl.VERTEX_SHADER, VS));
-    gl.attachShader(p, compile(gl.FRAGMENT_SHADER, fragmentShader(isArray)));
+    gl.attachShader(p, compile(gl.FRAGMENT_SHADER, fragmentShader(isArray, isUint)));
     gl.linkProgram(p);
     if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error('Link: ' + gl.getProgramInfoLog(p));
     const u = {};
@@ -154,15 +165,20 @@ export class DepthReader {
    */
   captureTexture(di, view, format) {
     const gl = this.gl;
-    const isArray = di.textureType ? di.textureType === 'texture-array' : true;
     const layer = di.imageIndex ?? (view.eye === 'right' ? 1 : 0);
     const sc = Math.min(1, this.maxSize / Math.max(di.width, di.height));
     const w = Math.max(8, Math.round(di.width * sc)), h = Math.max(8, Math.round(di.height * sc));
     const slot = this._slot(w, h);
     if (!slot) return false;
 
-    const windowDepth = di.depthNear !== undefined && di.depthFar !== undefined && !(di.rawValueToMeters > 0 && format !== 'float32');
+    const variant = this.variant || this._nextVariant(di, format);
+    if (!variant) { this._error(new Error('kein passender Textur-Sampler (' + format + ')')); this.tried.clear(); return false; }
+    const { isArray, isUint } = variant;
+    const nearFar = di.depthNear !== undefined && di.depthFar !== undefined;
+    let windowDepth = format === 'luminance-alpha' ? false : nearFar || !(di.rawValueToMeters > 0);
+    if (this.decodeFlip) windowDepth = !windowDepth;
     this.info.textureType = di.textureType || '(keins → array)';
+    this.info.sampler = (isUint ? 'uint ' : 'float ') + (isArray ? 'array' : '2D') + (this.variant ? '' : ' (Test)');
     this.info.size = `${di.width}×${di.height} → ${w}×${h}`;
     this.info.near = di.depthNear;
     this.info.far = di.depthFar;
@@ -172,7 +188,9 @@ export class DepthReader {
 
     const prevRT = this.renderer.getRenderTarget();
     const prevFB = gl.getParameter(gl.FRAMEBUFFER_BINDING);
-    const prog = this._program(isArray);
+    let prog;
+    try { prog = this._program(isArray, isUint); } catch (e) { this._reject(variant, e); return false; }
+    if (!this.variant) while (gl.getError() !== gl.NO_ERROR) { /* clear old errors before the test draw */ }
     gl.bindFramebuffer(gl.FRAMEBUFFER, slot.fb);
     gl.viewport(0, 0, w, h);
     gl.disable(gl.DEPTH_TEST); gl.disable(gl.BLEND); gl.disable(gl.SCISSOR_TEST);
@@ -194,6 +212,22 @@ export class DepthReader {
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     gl.bindVertexArray(null);
 
+    if (!this.variant) {
+      // test draw: a wrong texture target or sampler type shows up as a GL error
+      const err = gl.getError();
+      if (err !== gl.NO_ERROR) {
+        gl.bindFramebuffer(gl.FRAMEBUFFER, prevFB);
+        this.renderer.resetState();
+        this.renderer.setRenderTarget(prevRT);
+        this._reject(variant, new Error('GL-Fehler 0x' + err.toString(16) + ' mit ' + this.info.sampler));
+        return false;
+      }
+      this.variant = variant;
+      this.info.errors = 0;
+      this.info.lastError = null;
+      this.info.sampler = this.info.sampler.replace(' (Test)', '');
+    }
+
     gl.bindBuffer(gl.PIXEL_PACK_BUFFER, slot.pbo);
     gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, 0);
     gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
@@ -207,6 +241,36 @@ export class DepthReader {
     this.renderer.resetState();
     this.renderer.setRenderTarget(prevRT);
     return true;
+  }
+
+  // Sampler variants in order of likelihood; already failed ones are skipped.
+  _nextVariant(di, format) {
+    const arrays = di.textureType ? [di.textureType !== 'texture'] : [true, false];
+    const uints = format === 'unsigned-short' ? [false, true] : [false];
+    for (const isArray of arrays) {
+      for (const isUint of uints) {
+        const key = `${isArray}-${isUint}`;
+        if (!this.tried.has(key)) return { isArray, isUint, key };
+      }
+    }
+    return null;
+  }
+
+  _reject(variant, e) {
+    this.tried.add(variant.key);
+    this._error(e);
+  }
+
+  // Checks the decoded depth for plausibility; after many implausible frames the decode
+  // (window depth ↔ raw × rawValueToMeters) is swapped – at most a few times.
+  _plausibility(valid, median) {
+    const ok = valid > 0.05 && median > 0.15 && median < 15;
+    this.badFrames = ok ? 0 : this.badFrames + 1;
+    if (this.badFrames >= 20 && this.flips < 3) {
+      this.decodeFlip = !this.decodeFlip;
+      this.flips++;
+      this.badFrames = 0;
+    }
   }
 
   _captureCPU(frame, view) {
@@ -259,6 +323,7 @@ export class DepthReader {
         sample.sort((a, b) => a - b);
         this.info.median = sample[sample.length >> 1];
       }
+      this._plausibility(this.info.validRatio, valid ? this.info.median : 0);
       this.ready.push({ width: s.w, height: s.h, depth, ...s.meta, latency: performance.now() - s.t });
     }
     return this.ready.shift() || null;
