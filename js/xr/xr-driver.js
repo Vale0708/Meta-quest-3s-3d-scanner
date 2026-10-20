@@ -6,6 +6,8 @@ import { PerfGovernor } from './perf.js';
 import { tipOffset } from './tip.js';
 import { ColorCamera, PoseHistory, cameraPose, projFromModel, mul4 } from './color-camera.js';
 
+const MAX_TURN_RATE = 70; // °/s
+
 export async function isARSupported() {
   try { return !!navigator.xr && await navigator.xr.isSessionSupported('immersive-ar'); } catch { return false; }
 }
@@ -113,6 +115,7 @@ export async function startXR(o) {
   let last = performance.now();
   let frameNo = 0;
   let sceneAt = 0;
+  let prevQ = null, turnRate = 0;
   const headPanel = new THREE.Object3D();
   scene.add(headPanel);
 
@@ -125,12 +128,24 @@ export async function startXR(o) {
     const ref = renderer.xr.getReferenceSpace();
 
     const viewer = frame ? frame.getViewerPose(ref) : null;
-    if (viewer) poses.push(now, viewer.transform.matrix);
+    if (viewer) {
+      poses.push(now, viewer.transform.matrix);
+      // head rotation speed (°/s, smoothed): fast turns blur the depth and widen the gap
+      // between depth image and head pose → such frames are not captured
+      const q = viewer.transform.orientation;
+      if (prevQ && dt > 0) {
+        const dot = Math.min(1, Math.abs(q.x * prevQ.x + q.y * prevQ.y + q.z * prevQ.z + q.w * prevQ.w));
+        const speed = (2 * Math.acos(dot) * 180 / Math.PI) / dt;
+        turnRate = turnRate * 0.8 + speed * 0.2;
+      }
+      prevQ = { x: q.x, y: q.y, z: q.z, w: q.w };
+      app.tooFast = turnRate > MAX_TURN_RATE;
+    }
 
     // ---- depth (+ color)
     if (frame && tryDepth) {
       const pose = viewer;
-      if (pose && pose.views.length && frameNo % perf.depthEvery === 0 && !app.fusion.busy) {
+      if (pose && pose.views.length && frameNo % perf.depthEvery === 0 && !app.fusion.busy && !app.tooFast) {
         depthReader.capture(frame, pose.views[0], session);
       }
       const f = depthReader.poll();
@@ -249,6 +264,7 @@ export async function startXR(o) {
     renderer.setAnimationLoop(null);
     diag.depth = { ...depthReader.info };
     diag.orientation = app.fusion.orientation;
+    diag.align = app.fusion.align || null;
     diag.perf = perf.summary();
     depthReader.dispose();
     if (colorCam) diag.colorFrames = colorCam.frames;

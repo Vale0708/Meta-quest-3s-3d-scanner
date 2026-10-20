@@ -16,7 +16,7 @@ export const BLOCK = 8;
 const BV = BLOCK * BLOCK * BLOCK;
 const OFF = 1 << 14; // offset so that negative block indices become positive
 
-function blockKey(bx, by, bz) {
+export function blockKey(bx, by, bz) {
   // 3 × 15 bits → 45 bits, exactly representable as a Number
   return ((bx + OFF) * 32768 + (by + OFF)) * 32768 + (bz + OFF);
 }
@@ -38,6 +38,7 @@ export class TsdfVolume {
    * @param {number} o.voxelSize   edge length of a voxel in m
    * @param {number} [o.truncation] truncation distance in m
    * @param {number} [o.maxWeight]  upper bound of the running average weight
+   * @param {number} [o.solidWeight] weight from which a voxel counts as well observed (slow carving)
    * @param {number} [o.minDepth]   ignore closer measurements (m)
    * @param {number} [o.maxDepth]   ignore farther measurements (m)
    * @param {object|null} [o.box]   {center:[x,y,z], half:[hx,hy,hz], yaw} – only fuse inside
@@ -46,6 +47,7 @@ export class TsdfVolume {
     this.voxelSize = o.voxelSize;
     this.truncation = o.truncation ?? Math.max(3 * o.voxelSize, 0.02);
     this.maxWeight = o.maxWeight ?? 64;
+    this.solidWeight = o.solidWeight ?? 4;
     this.minDepth = o.minDepth ?? 0.1;
     this.maxDepth = o.maxDepth ?? 4;
     this.edgeFilter = o.edgeFilter ?? 0.04; // relative depth jump that marks an edge pixel
@@ -114,6 +116,12 @@ export class TsdfVolume {
     const depth = this._filterEdges(f.depth, W, H);
     const vs = this.voxelSize, tr = this.truncation, bsz = vs * BLOCK;
     const minD = this.minDepth, maxD = this.maxDepth;
+    // noise of the Quest depth grows ~ with the square of the distance → weight (dRef/d)²,
+    // capped to [0.1, 1]: close views dominate, far views only fill gaps
+    const dRef2 = (0.5 * maxD) ** 2;
+    // voxels that are already well observed are carved only slowly by "free space" from a
+    // single frame – a misregistered frame (head moved fast) must not erase good surfaces
+    const solidW = this.solidWeight;
 
     // camera rotation R (columns) and position t
     const r00 = M[0], r10 = M[1], r20 = M[2];
@@ -199,8 +207,9 @@ export class TsdfVolume {
             if (sdf < -tr) continue;
             const val = sdf >= tr ? 1 : sdf / tr;
             const w0 = Wt[idx];
-            // distant measurements are noisier → lower weight
-            const wNew = 1 / Math.max(0.25, d);
+            let wNew = dRef2 / (d * d);
+            wNew = wNew > 1 ? 1 : wNew < 0.1 ? 0.1 : wNew;
+            if (sdf >= tr && w0 >= solidW) wNew *= 0.2;
             const wSum = w0 + wNew;
             T[idx] = (T[idx] * w0 + val * wNew) / wSum;
             Wt[idx] = wSum > maxW ? maxW : wSum;

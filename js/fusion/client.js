@@ -23,6 +23,7 @@ export class FusionClient {
         this.stats = m.stats;
         this.lastMs = m.ms;
         this.calibrating = m.calibrating;
+        if (m.align) this.align = m.align;
         this.onStatus?.();
         break;
       case 'orientation':

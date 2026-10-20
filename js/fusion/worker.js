@@ -1,5 +1,6 @@
 // Web worker: depth fusion off the main thread (keeps the XR frame rate up).
 import { TsdfVolume } from './tsdf.js';
+import { alignFrame, mul4, IDENTITY } from './align.js';
 import { removeSmallComponents } from '../mesh/ops.js';
 
 let vol = null;
@@ -7,6 +8,10 @@ let orientation = 'auto'; // 'auto' | 'none' | 'flipY' | 'flipX' | 'flipXY'
 let decided = null;
 let pending = []; // frames buffered while the orientation is still unknown
 let probe = null;
+// frame-to-model alignment: current world-space pose correction + statistics
+let corr = IDENTITY();
+let align = { aligned: 0, rejected: 0, inRow: 0, shift: 0, angle: 0, enabled: true };
+const isIdentity = (m) => m.every((v, i) => Math.abs(v - (i % 5 === 0 ? 1 : 0)) < 1e-9);
 
 const VARIANTS = ['none', 'flipY', 'flipX', 'flipXY'];
 
@@ -74,7 +79,25 @@ function probeOrientation(f) {
 function integrate(f) {
   const t0 = performance.now();
   const depth = orient(f.depth, f.width, f.height, decided);
-  vol.integrate({ ...f, depth }, f.color || null);
+  const frame = { ...f, depth };
+  if (align.enabled && vol.frames >= 8) {
+    let a = alignFrame(vol, frame, corr);
+    // the last correction may be stale (e.g. after a tracking jump) → retry from the raw pose
+    if (a.status === 'rejected' && !isIdentity(corr)) a = alignFrame(vol, frame, IDENTITY());
+    if (a.status === 'rejected') {
+      align.rejected++;
+      align.inRow++;
+      return -(performance.now() - t0); // negative = not fused
+    }
+    align.inRow = 0;
+    corr = a.corr;
+    if (a.status === 'aligned') { align.aligned++; align.shift = a.shift; align.angle = a.angle; }
+  }
+  if (!isIdentity(corr)) {
+    frame.camToWorld = mul4(corr, f.camToWorld);
+    if (f.color) frame.color = { ...f.color, camToWorld: mul4(corr, f.color.camToWorld) };
+  }
+  vol.integrate(frame, frame.color || null);
   return performance.now() - t0;
 }
 
@@ -94,6 +117,8 @@ self.onmessage = (ev) => {
         decided = orientation === 'auto' ? null : orientation;
         pending = [];
         probe = null;
+        corr = IDENTITY();
+        align = { aligned: 0, rejected: 0, inRow: 0, shift: 0, angle: 0, enabled: m.config.align !== false };
         postMessage({ type: 'ready', orientation: decided });
         break;
       case 'box':
@@ -101,6 +126,8 @@ self.onmessage = (ev) => {
         break;
       case 'clear':
         vol.clear();
+        corr = IDENTITY();
+        align.inRow = 0;
         break;
       case 'clearColor':
         vol.clearColor();
@@ -121,7 +148,8 @@ self.onmessage = (ev) => {
           break;
         }
         const ms = integrate(f);
-        postMessage({ type: 'integrated', ms, stats: vol.stats(), calibrating: false });
+        postMessage({ type: 'integrated', ms: Math.abs(ms), fused: ms >= 0, stats: vol.stats(), calibrating: false,
+          align: { aligned: align.aligned, rejected: align.rejected, inRow: align.inRow, shift: align.shift, angle: align.angle } });
         break;
       }
       case 'extract': {

@@ -49,7 +49,9 @@ async function cameraTest() {
     $('#color').checked = true;
     storeColorPref();
   } catch (e) {
-    info.textContent = `Kein Kamerazugriff: ${e.name || ''} ${e.message || e}. Der Quest-Browser gibt die Kameras evtl. nicht frei. Scannen geht trotzdem, nur ohne Farbe.`;
+    info.textContent = e && e.name === 'NotFoundError'
+      ? 'Der Quest-Browser meldet keine Kamera (NotFoundError). Meta gibt die Passthrough-Kameras im Browser bisher nicht frei. Farbe kommt deshalb mit der nativen App. Scannen geht trotzdem, nur ohne Farbe.'
+      : `Kein Kamerazugriff: ${e.name || ''} ${e.message || e}. Scannen geht trotzdem, nur ohne Farbe.`;
   }
 }
 
@@ -170,7 +172,7 @@ async function onSave(rec) {
 
 function showDiag(diag) {
   const d = diag?.depth || {};
-  $('#lastdiag').textContent = diag ? `Letzte Sitzung: Features ${diag.features?.join(', ') || '–'} · Tiefe ${diag.depthUsage ?? '–'}/${diag.depthFormat ?? '–'}, ${d.frames ?? 0} Bilder, ${d.size ?? ''}, ${d.decode ?? ''}, near ${d.near ?? '–'} far ${d.far ?? '–'}, Median ${d.median ? d.median.toFixed(2) + ' m' : '–'}, gültig ${d.validRatio != null ? Math.round(d.validRatio * 100) + ' %' : '–'}, Ausrichtung ${diag.orientation ?? '–'}, Farbe ${diag.color ?? '–'}${diag.colorFrames != null ? ` (${diag.colorFrames} Kamerabilder)` : ''}${diag.perf ? `, FPS Ø ${diag.perf.avg}/${diag.perf.target}, min ${diag.perf.min ?? '–'}, ${diag.perf.slowPct} % langsam` : ''}${d.lastError ? ' · Fehler: ' + d.lastError : ''}` : '';
+  $('#lastdiag').textContent = diag ? `Letzte Sitzung: Features ${diag.features?.join(', ') || '–'} · Tiefe ${diag.depthUsage ?? '–'}/${diag.depthFormat ?? '–'}, ${d.frames ?? 0} Bilder, ${d.size ?? ''}, ${d.decode ?? ''}, near ${d.near ?? '–'} far ${d.far ?? '–'}, Median ${d.median ? d.median.toFixed(2) + ' m' : '–'}, gültig ${d.validRatio != null ? Math.round(d.validRatio * 100) + ' %' : '–'}, Ausrichtung ${diag.orientation ?? '–'}, ${diag.align ? `Posen korrigiert ${diag.align.aligned}, verworfen ${diag.align.rejected}, ` : ''}Farbe ${diag.color ?? '–'}${diag.colorFrames != null ? ` (${diag.colorFrames} Kamerabilder)` : ''}${diag.perf ? `, FPS Ø ${diag.perf.avg}/${diag.perf.target}, min ${diag.perf.min ?? '–'}, ${diag.perf.slowPct} % langsam` : ''}${d.lastError ? ' · Fehler: ' + d.lastError : ''}` : '';
 }
 
 async function startScan(id) {

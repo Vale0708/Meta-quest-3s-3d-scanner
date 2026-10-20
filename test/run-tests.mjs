@@ -11,6 +11,7 @@ import { perspective, lookAt, renderDepth, renderColor, mulberry32 } from '../js
 import { toPLY } from '../js/export/ply.js';
 import { toCadSpace } from '../js/mesh/cad.js';
 import { dominantYaw } from '../js/export/pipeline.js';
+import { alignFrame, mul4, IDENTITY } from '../js/fusion/align.js';
 import { loadTip, tipOffset, nudgeTip, TIP_DEFAULT, TIP_MIN } from '../js/xr/tip.js';
 
 let failed = 0;
@@ -250,6 +251,95 @@ mkdirSync(outDir, { recursive: true });
   const step = toSTEP([{ name: 'Scan', mesh: toCadSpace(dec, {}) }, { name: 'Marker', color: [255, 80, 140], mesh: cylinder([0, 0, 0], [0, 0, 10], 2, 12) }], { name: 'Farbe' });
   writeFileSync(new URL('color.step', outDir), step);
   check('STEP mit Farben', step.includes('COLOUR_RGB') && step.includes('MECHANICAL_DESIGN_GEOMETRIC_PRESENTATION_REPRESENTATION'));
+}
+
+// ---- frame-to-model alignment: pose errors of the headset are corrected / bad frames rejected
+{
+  const center = [0, 0.08, -0.5], r = 0.06;
+  const scene = [{ type: 'sphere', c: center, r }, { type: 'plane', y: 0 }, { type: 'box', min: [0.03, 0, -0.6], max: [0.09, 0.05, -0.54] }];
+  const P = perspective(Math.PI / 2, 1, 0.1, 100);
+  const mk = () => new TsdfVolume({ voxelSize: 0.004, truncation: 0.02, minDepth: 0.15, maxDepth: 1.0,
+    box: { center: [center[0], 0.08, center[2]], half: [0.12, 0.075, 0.12], yaw: 0 } });
+  const rnd = mulberry32(7);
+  const eyeAt = (az, el, dist) => [center[0] + Math.cos(az) * Math.cos(el) * dist, center[1] + Math.sin(el) * dist, center[2] + Math.sin(az) * Math.cos(el) * dist];
+  // pose error: rotation about Y by deg around the camera + translation
+  const perturb = (M, deg, t) => {
+    const a = deg * Math.PI / 180, co = Math.cos(a), si = Math.sin(a);
+    const E = IDENTITY();
+    E[0] = co; E[2] = -si; E[8] = si; E[10] = co;
+    const toO = IDENTITY(), back = IDENTITY();
+    toO[12] = -M[12]; toO[13] = -M[13]; toO[14] = -M[14];
+    back[12] = M[12] + t[0]; back[13] = M[13] + t[1]; back[14] = M[14] + t[2];
+    return Float32Array.from(mul4(back, mul4(E, mul4(toO, M))));
+  };
+  const radius = (vol) => {
+    const m = vol.extractMesh({ minWeight: 2 });
+    let sum = 0, n = 0;
+    for (let i = 0; i < m.positions.length; i += 3) {
+      const x = m.positions[i], y = m.positions[i + 1], z = m.positions[i + 2];
+      if (y < 0.03 || x > 0.02) continue; // sphere only (box sits at +x)
+      sum += Math.hypot(x - center[0], y - center[1], z - center[2]); n++;
+    }
+    return { r: sum / n, n };
+  };
+  const views = [];
+  for (let el = 0.3; el <= 1.2; el += 0.3) for (let az = 0; az < Math.PI * 2; az += Math.PI / 8) views.push(lookAt(eyeAt(az, el, 0.4), center));
+
+  // 1. perfect poses: alignment must not move anything
+  const vol = mk();
+  let maxShift = 0, aligned = 0;
+  for (const M of views) {
+    const f = { width: 160, height: 160, depth: renderDepth(scene, M, P, 160, 160, 0.003, rnd), proj: P, camToWorld: M };
+    if (vol.frames >= 8) {
+      const a = alignFrame(vol, f);
+      if (a.status === 'aligned') { aligned++; maxShift = Math.max(maxShift, a.shift); }
+    }
+    vol.integrate(f);
+  }
+  check('Ausrichtung: korrekte Posen bleiben unverändert', aligned > 30 && maxShift < 0.0015, `${aligned} ausgerichtet, max. Korrektur ${(maxShift * 1000).toFixed(2)} mm`);
+
+  // 2. pose off by 1.5 cm + 2°: the correction finds the true pose
+  let worst = 0, ok = 0;
+  for (let k = 0; k < 8; k++) {
+    const M = lookAt(eyeAt(k * 0.8 + 0.2, 0.7, 0.42), center);
+    const bad = perturb(M, k % 2 ? 2 : -2, [0.012 * (k % 3 - 1), 0.008, -0.01 * (k % 2)]);
+    const f = { width: 160, height: 160, depth: renderDepth(scene, M, P, 160, 160, 0.003, rnd), proj: P, camToWorld: bad };
+    const a = alignFrame(vol, f);
+    if (a.status !== 'aligned') continue;
+    ok++;
+    const fixed = mul4(a.corr, bad);
+    // error of the corrected camera: position of a point 0.4 m in front of it
+    const err = Math.hypot(...[0, 1, 2].map((i) => (fixed[12 + i] - 0.4 * fixed[8 + i]) - (M[12 + i] - 0.4 * M[8 + i])));
+    worst = Math.max(worst, err);
+  }
+  check('Ausrichtung: 1,5 cm + 2° Posenfehler korrigiert', ok >= 6 && worst < 0.003, `${ok}/8 ausgerichtet, Restfehler max. ${(worst * 1000).toFixed(2)} mm`);
+
+  // 3. frames 3 cm off: without alignment the sphere shrinks, with alignment it stays
+  const run = (useAlign, off = 0.03) => {
+    const v = mk();
+    const rr = mulberry32(3);
+    for (const M of views) v.integrate({ width: 160, height: 160, depth: renderDepth(scene, M, P, 160, 160, 0.003, rr), proj: P, camToWorld: M });
+    let rejected = 0;
+    for (let k = 0; k < 12; k++) {
+      const eye = eyeAt(k * 0.5, 0.6, 0.4), M = lookAt(eye, center);
+      const dir = [center[0] - eye[0], center[1] - eye[1], center[2] - eye[2]], l = Math.hypot(...dir);
+      const bad = perturb(M, 0, dir.map((x) => x / l * off));
+      const f = { width: 160, height: 160, depth: renderDepth(scene, M, P, 160, 160, 0.003, rr), proj: P, camToWorld: bad };
+      if (useAlign) {
+        const a = alignFrame(v, f);
+        if (a.status === 'rejected') { rejected++; continue; }
+        f.camToWorld = Float32Array.from(mul4(a.corr, bad));
+      }
+      v.integrate(f);
+    }
+    return { ...radius(v), rejected };
+  };
+  const without = run(false), withA = run(true);
+  check('Fehl-Frames: mit Ausrichtung bleibt die Kugel maßhaltig', Math.abs(withA.r - r) < 0.0015,
+    `ohne: r=${(without.r * 1000).toFixed(2)} mm · mit: r=${(withA.r * 1000).toFixed(2)} mm (${withA.rejected} verworfen)`);
+  const far = run(true, 0.07);
+  check('Grob falsche Frames (7 cm) werden verworfen', far.rejected >= 10 && Math.abs(far.r - r) < 0.0015,
+    `${far.rejected}/12 verworfen, r=${(far.r * 1000).toFixed(2)} mm`);
 }
 
 // ---- floating measuring tip
