@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Quest 3D-Scanner</title>
+  <link rel="stylesheet" href="css/style.css">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <script type="importmap">
+    { "imports": { "three": "./vendor/three/three.module.min.js", "three/addons/": "./vendor/three/addons/" } }
+  </script>
+</head>
+<body>
+  <header>
+    <h1>Quest 3D-Scanner</h1>
+    <p class="sub">Scannen mit der Meta Quest 3/3S und als STL, STEP oder OBJ fürs CAD exportieren</p>
+    <div id="support" class="support"></div>
+  </header>
+
+  <main>
+    <section id="start">
+      <h2>Neuer Scan</h2>
+      <div class="modes" id="modes"></div>
+      <details class="settings">
+        <summary>Einstellungen</summary>
+        <label>Auflösung
+          <select id="quality">
+            <option value="fine">Fein (langsamer, mehr Rauschen sichtbar)</option>
+            <option value="normal" selected>Normal</option>
+            <option value="coarse">Grob (schnell, glatter)</option>
+          </select>
+        </label>
+        <label>Tiefenbild-Ausrichtung
+          <select id="orientation">
+            <option value="auto" selected>Automatisch erkennen</option>
+            <option value="none">Normal</option>
+            <option value="flipY">Vertikal gespiegelt</option>
+            <option value="flipX">Horizontal gespiegelt</option>
+            <option value="flipXY">Beides gespiegelt</option>
+          </select>
+        </label>
+        <p class="hint">Messspitze: <span id="tipinfo"></span> <button id="tipreset" class="small">zurücksetzen</button></p>
+      </details>
+      <p id="lastdiag" class="diag"></p>
+    </section>
+
+    <section id="scans">
+      <h2>Gespeicherte Scans</h2>
+      <div id="list" class="list"></div>
+    </section>
+
+    <section id="detail" hidden>
+      <div class="detail-head">
+        <input id="scanname" class="name" aria-label="Name">
+        <button id="close" class="small">Schließen</button>
+      </div>
+      <div id="viewer" class="viewer"></div>
+      <div class="export">
+        <fieldset>
+          <legend>Inhalt</legend>
+          <label><input type="checkbox" id="o-scan" checked> Scan-Netz</label>
+          <label><input type="checkbox" id="o-sceneMesh" checked> Raum-Mesh der Quest</label>
+          <label><input type="checkbox" id="o-planes"> Raumflächen (Wände/Boden)</label>
+          <label><input type="checkbox" id="o-measurements" checked> Messungen als Geometrie</label>
+        </fieldset>
+        <fieldset>
+          <legend>Aufbereitung</legend>
+          <label>Glätten <input type="range" id="o-smooth" min="0" max="15" value="3"> <span id="o-smooth-v">3</span></label>
+          <label><input type="checkbox" id="o-clean" checked> Rauschinseln entfernen</label>
+          <label><input type="checkbox" id="o-align" checked> Raum an Wänden ausrichten</label>
+          <label>Auflage abschneiden <input type="number" id="o-cutBottom" value="0" min="0" max="200" step="1" style="width:5em"> mm</label>
+          <label>STEP max. Dreiecke <input type="number" id="o-stepMaxTris" value="30000" min="500" step="1000"></label>
+        </fieldset>
+        <div class="buttons">
+          <button data-fmt="stl" class="primary">STL</button>
+          <button data-fmt="step" class="primary">STEP</button>
+          <button data-fmt="obj">OBJ</button>
+          <button data-fmt="csv">Messungen (CSV)</button>
+        </div>
+        <p id="exportinfo" class="hint"></p>
+      </div>
+      <div id="measurements"></div>
+    </section>
+
+    <section class="help">
+      <h2>Kurzanleitung</h2>
+      <ol>
+        <li><b>Modus wählen</b> und „In VR starten“ antippen. Die Quest fragt nach der Erlaubnis für die Raumdaten: erlauben.</li>
+        <li><b>Linker Controller</b> trägt das Menü, mit dem <b>rechten Controller</b> zeigst du darauf und drückst den Trigger.</li>
+        <li><b>Objekt-Modi:</b> Halte die rote Spitze auf die Tischplatte neben dem Objekt und drück den Trigger. Damit setzt du die Scan-Box ab (rechter Stick: Größe/Drehen, Grip: verschieben, linker Stick: Höhe).</li>
+        <li><b>A</b> startet oder pausiert den Scan. Geh langsam um das Objekt herum und schau es aus vielen Winkeln an, auch von oben. Am Anfang kurz den Kopf hoch/runter und links/rechts bewegen, damit sich das Tiefenbild kalibriert.</li>
+        <li><b>Messen</b> (genauer als der Scan): Messwerkzeug wählen und die Spitze antippen.
+          <i>Abstand</i> braucht 2 Punkte, <i>Kreis/Ø</i> mindestens 3 Punkte rund um eine Stange, <i>Ebene</i> mindestens 3 Punkte. Danach „Messung fertig“. <b>B</b> macht den letzten Punkt rückgängig.</li>
+        <li><b>Spitze kalibrieren</b> (einmalig, wichtig für mm-Genauigkeit): Werkzeug wählen. Dann die Controllerspitze in eine kleine Vertiefung halten, Trigger gedrückt halten und den Controller ca. 5 s in alle Richtungen kippen, ohne dass die Spitze wegrutscht.</li>
+        <li><b>Fertig &amp; Speichern</b>, dann hier exportieren. Die Datei landet im Download-Ordner der Quest.</li>
+      </ol>
+      <p class="hint">Koordinaten im Export: Millimeter, Z nach oben. Objekt-Modi: Nullpunkt = Mitte der Box-Unterseite. Raum: Nullpunkt = Boden unter der Startposition.</p>
+    </section>
+  </main>
+  <div id="simstage" class="simstage" hidden></div>
+  <div id="toast" class="toast" hidden></div>
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>

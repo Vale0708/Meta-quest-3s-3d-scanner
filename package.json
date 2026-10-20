@@ -1,0 +1,17 @@
+{
+  "name": "quest-3d-scanner",
+  "version": "1.0.0",
+  "description": "3D-Scanner für Meta Quest 3/3S (WebXR) mit STL/STEP/OBJ-Export",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node serve.mjs",
+    "test": "node test/run-tests.mjs && node test/orientation-test.mjs"
+  },
+  "dependencies": {
+    "selfsigned": "^2.4.1"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
