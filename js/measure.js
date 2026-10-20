@@ -155,6 +155,49 @@ export function pivotCalibration(poses) {
   return { tip, pivot, rms };
 }
 
+// Rotation angle (degrees) between the orientations of two poses (column-major 4×4).
+function rotationAngleDeg(a, b) {
+  // trace(Ra^T Rb) = 1 + 2 cos θ
+  let tr = 0;
+  for (let c = 0; c < 3; c++) for (let r = 0; r < 3; r++) tr += a[c * 4 + r] * b[c * 4 + r];
+  return (Math.acos(Math.max(-1, Math.min(1, (tr - 1) / 2))) * 180) / Math.PI;
+}
+
+function residuals(poses, tip, pivot) {
+  return poses.map(({ m }) => distance([
+    m[0] * tip[0] + m[4] * tip[1] + m[8] * tip[2] + m[12],
+    m[1] * tip[0] + m[5] * tip[1] + m[9] * tip[2] + m[13],
+    m[2] * tip[0] + m[6] * tip[1] + m[10] * tip[2] + m[14],
+  ], pivot));
+}
+
+/**
+ * Pivot calibration that tolerates slipping: poses whose tip lands far from the
+ * pivot (residual > max(3 × median, 2 mm)) are dropped and the fit is repeated.
+ * Also reports how much the controller was tilted (coverage, 100 % ≙ 50°).
+ * @returns {{tip, pivot, rms, used, total, coverage}|null}
+ */
+export function robustPivotCalibration(poses) {
+  if (poses.length < 10) return null;
+  let set = poses;
+  let r = pivotCalibration(set);
+  for (let it = 0; it < 3 && r; it++) {
+    const res = residuals(set, r.tip, r.pivot);
+    const sorted = res.slice().sort((a, b) => a - b);
+    const lim = Math.max(3 * sorted[sorted.length >> 1], 0.002);
+    const keep = set.filter((_, i) => res[i] <= lim);
+    if (keep.length === set.length || keep.length < 10) break;
+    set = keep;
+    r = pivotCalibration(set);
+  }
+  if (!r) return null;
+  // largest tilt between any kept pose and the first/middle/last one
+  let maxAngle = 0;
+  const refs = [set[0], set[set.length >> 1], set[set.length - 1]];
+  for (const ref of refs) for (const p of set) maxAngle = Math.max(maxAngle, rotationAngleDeg(ref.m, p.m));
+  return { ...r, used: set.length, total: poses.length, coverage: Math.min(1, maxAngle / 50) };
+}
+
 // Evaluates a measurement from its points.
 export function evaluateMeasurement(type, points) {
   switch (type) {
