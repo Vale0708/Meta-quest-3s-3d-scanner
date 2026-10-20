@@ -2,6 +2,7 @@
 import * as THREE from 'three';
 import { ScanApp } from './scan-app.js';
 import { DepthReader } from './depth-reader.js';
+import { PerfGovernor } from './perf.js';
 import { ColorCamera, PoseHistory, cameraPose, projFromModel, mul4 } from './color-camera.js';
 
 const TIP_KEY = 'quest-scanner-tip-offset';
@@ -45,6 +46,8 @@ export async function startXR(o) {
   const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
   renderer.setPixelRatio(1);
   renderer.xr.enabled = true;
+  // foveated rendering: less detail at the edges of the view saves GPU time on the Quest
+  renderer.xr.setFoveation(1);
   renderer.xr.setReferenceSpaceType('local-floor');
   renderer.domElement.style.display = 'none';
   document.body.appendChild(renderer.domElement);
@@ -81,6 +84,8 @@ export async function startXR(o) {
   if (features.length && !features.includes('depth-sensing')) app.message = '!Depth API nicht verfügbar – nur Messen/Raum-Mesh';
 
   await renderer.xr.setSession(session);
+  const perf = new PerfGovernor(session.frameRate || 72);
+  app.perf = perf;
   const depthReader = new DepthReader(renderer, { maxSize: o.mode.id === 'small' ? 192 : 160 });
 
   // ---------------------------------------------------- controllers
@@ -112,6 +117,7 @@ export async function startXR(o) {
 
   renderer.setAnimationLoop((time, frame) => {
     const now = performance.now();
+    perf.tick(now, now - last);
     const dt = Math.min(0.1, (now - last) / 1000);
     last = now;
     frameNo++;
@@ -123,7 +129,7 @@ export async function startXR(o) {
     // ---- depth (+ color)
     if (frame && features.includes('depth-sensing')) {
       const pose = viewer;
-      if (pose && pose.views.length && frameNo % 2 === 0 && !app.fusion.busy) {
+      if (pose && pose.views.length && frameNo % perf.depthEvery === 0 && !app.fusion.busy) {
         depthReader.capture(frame, pose.views[0], session);
       }
       const f = depthReader.poll();
@@ -236,6 +242,7 @@ export async function startXR(o) {
     renderer.setAnimationLoop(null);
     diag.depth = { ...depthReader.info };
     diag.orientation = app.fusion.orientation;
+    diag.perf = perf.summary();
     depthReader.dispose();
     if (colorCam) diag.colorFrames = colorCam.frames;
     colorCam?.stop();

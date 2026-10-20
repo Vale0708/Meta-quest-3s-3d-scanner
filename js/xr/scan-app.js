@@ -138,7 +138,7 @@ export class ScanApp {
     this.tipMarker.visible = this.tool !== 'none' || this.phase === 'place';
 
     // live preview
-    if (this.preview && !this.previewBusy && now - this.previewAt > (this.mode.id === 'room' ? 2500 : 1200) && this.fusion.stats.blocks > 0 &&
+    if (this.preview && !this.previewBusy && now - this.previewAt > (this.mode.id === 'room' ? 2500 : 1200) * (this.perf?.previewFactor ?? 1) && this.fusion.stats.blocks > 0 &&
       (this.phase === 'scanning' || this.previewStale)) {
       this.previewBusy = true;
       this.previewStale = false;
@@ -397,6 +397,11 @@ export class ScanApp {
     const lines = [];
     const phaseText = { place: 'Box platzieren', ready: 'Bereit', scanning: 'Scannt …', paused: 'Pausiert', saving: 'Speichert …' }[this.phase];
     lines.push(`${phaseText} · ${this.frameCount} Tiefenbilder · ${st.blocks} Blöcke`);
+    if (this.perf) {
+      const p = this.perf;
+      const fps = `${Math.round(p.fps)}/${p.target} FPS`;
+      lines.push(p.level ? `!${fps} – gedrosselt (Stufe ${p.level}), langsamer bewegen` : fps);
+    }
     if (!this.depthOk || performance.now() - this.lastDepthAt > 2000) lines.push('!Keine Tiefendaten (Depth API) – siehe Hilfe');
     else if (this.fusion.calibrating && this.phase === 'scanning') lines.push('!Kalibriere Tiefenbild: Kopf hoch/runter + links/rechts');
     if (this.phase === 'place') lines.push('Spitze auf Tisch → Trigger = Box absetzen');

@@ -13,4 +13,4 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - run: node test/run-tests.mjs && node test/orientation-test.mjs
+      - run: node test/run-tests.mjs && node test/orientation-test.mjs && node test/perf-test.mjs
