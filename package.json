@@ -6,7 +6,7 @@
   "type": "module",
   "scripts": {
     "start": "node serve.mjs",
-    "test": "node test/run-tests.mjs && node test/orientation-test.mjs"
+    "test": "node test/run-tests.mjs && node test/orientation-test.mjs && node test/perf-test.mjs"
   },
   "dependencies": {
     "selfsigned": "^2.4.1"

@@ -168,7 +168,7 @@ async function onSave(rec) {
 
 function showDiag(diag) {
   const d = diag?.depth || {};
-  $('#lastdiag').textContent = diag ? `Letzte Sitzung: Features ${diag.features?.join(', ') || '–'} · Tiefe ${diag.depthUsage ?? '–'}/${diag.depthFormat ?? '–'}, ${d.frames ?? 0} Bilder, ${d.size ?? ''}, ${d.decode ?? ''}, near ${d.near ?? '–'} far ${d.far ?? '–'}, Median ${d.median ? d.median.toFixed(2) + ' m' : '–'}, gültig ${d.validRatio != null ? Math.round(d.validRatio * 100) + ' %' : '–'}, Ausrichtung ${diag.orientation ?? '–'}, Farbe ${diag.color ?? '–'}${diag.colorFrames != null ? ` (${diag.colorFrames} Kamerabilder)` : ''}${d.lastError ? ' · Fehler: ' + d.lastError : ''}` : '';
+  $('#lastdiag').textContent = diag ? `Letzte Sitzung: Features ${diag.features?.join(', ') || '–'} · Tiefe ${diag.depthUsage ?? '–'}/${diag.depthFormat ?? '–'}, ${d.frames ?? 0} Bilder, ${d.size ?? ''}, ${d.decode ?? ''}, near ${d.near ?? '–'} far ${d.far ?? '–'}, Median ${d.median ? d.median.toFixed(2) + ' m' : '–'}, gültig ${d.validRatio != null ? Math.round(d.validRatio * 100) + ' %' : '–'}, Ausrichtung ${diag.orientation ?? '–'}, Farbe ${diag.color ?? '–'}${diag.colorFrames != null ? ` (${diag.colorFrames} Kamerabilder)` : ''}${diag.perf ? `, FPS Ø ${diag.perf.avg}/${diag.perf.target}, min ${diag.perf.min ?? '–'}, ${diag.perf.slowPct} % langsam` : ''}${d.lastError ? ' · Fehler: ' + d.lastError : ''}` : '';
 }
 
 async function startScan(id) {
