@@ -404,7 +404,7 @@ export class ScanApp {
       box: this.box ? { center: this.box.center, half: this.box.half, yaw: this.box.yaw } : null,
       origin: this.box ? [this.box.center[0], this.box.center[1] - this.box.half[1], this.box.center[2]] : [0, 0, 0],
       yaw: this.box ? this.box.yaw : null,
-      stats: { ...this.fusion.stats, depthFrames: this.frameCount, orientation: this.fusion.orientation },
+      stats: { ...this.fusion.stats, depthFrames: this.frameCount, orientation: this.fusion.orientation, align: this.fusion.align || null },
     };
     await this.onSave(rec);
     this.message = 'Gespeichert!';
@@ -468,6 +468,10 @@ export class ScanApp {
     const lines = [];
     const fps = this.perf ? ` · ${Math.round(this.perf.fps)}/${this.perf.target} FPS` : '';
     lines.push(`${this.frameCount} Tiefenbilder · ${st.blocks} Blöcke${fps}`);
+    const al = this.fusion.align;
+    if (al && this.phase === 'scanning' && al.inRow > 15) lines.push('!Tiefenbild passt nicht zum Modell – auf schon erfasste Stelle schauen (oder Scan löschen)');
+    else if (al && (al.aligned || al.rejected)) lines.push(`Ausrichtung: ${al.aligned} korrigiert (zuletzt ${(al.shift * 1000).toFixed(1)} mm), ${al.rejected} verworfen`);
+    if (this.tooFast && this.phase === 'scanning') lines.push('!Zu schnell – Kopf langsamer drehen');
     if (this.perf?.level) lines.push(`!Gedrosselt (Stufe ${this.perf.level}) – langsamer bewegen`);
     if (!this.depthOk || performance.now() - this.lastDepthAt > 2000) lines.push('!Keine Tiefendaten (Depth API) – nur Messen/Quest-Raum möglich');
     else if (this.fusion.calibrating && this.phase === 'scanning') lines.push('!Richte Tiefenbild aus: Kopf hoch/runter + links/rechts');

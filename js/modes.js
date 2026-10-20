@@ -8,7 +8,7 @@ export const MODES = {
     name: 'Kleine Objekte',
     hint: 'bis ca. 30 cm – Objekt auf Tisch stellen, Box drumherum legen, langsam drumherum gehen',
     voxelSize: 0.004,
-    truncation: 0.015,
+    truncation: 0.02,
     minDepth: 0.15,
     maxDepth: 1.0,
     box: { size: [0.3, 0.3, 0.3] },
