@@ -1,0 +1,39 @@
+# Publishes the app via GitHub Pages (https://<user>.github.io/<repo>/):
+# after the tests, the site files are pushed to the gh-pages branch.
+# If Pages does not turn on by itself: Settings → Pages → Source:
+# "Deploy from a branch", branch gh-pages, folder / (root).
+name: Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node test/run-tests.mjs && node test/orientation-test.mjs
+      - name: Push site to gh-pages
+        run: |
+          mkdir _site
+          cp -r index.html manifest.webmanifest icon.svg css js vendor _site/
+          touch _site/.nojekyll
+          cd _site
+          git init -q -b gh-pages
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -q -m "Deploy ${GITHUB_SHA}"
+          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${GITHUB_REPOSITORY}.git" gh-pages
