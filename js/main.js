@@ -4,6 +4,7 @@ import { isARSupported, startXR, loadTipOffset } from './xr/xr-driver.js';
 import { saveScan, listScans, getScan, deleteScan } from './storage.js';
 import { buildParts, exportFile, DEFAULT_OPTIONS } from './export/pipeline.js';
 import { Viewer } from './viewer.js';
+import { versionText } from './version.js';
 import { listCameras, loadDeviceId, saveDeviceId } from './xr/color-camera.js';
 
 const $ = (s) => document.querySelector(s);
@@ -225,6 +226,7 @@ async function init() {
       ? 'Kein WebXR-AR auf diesem Gerät. Öffne die Seite im <b>Browser der Quest</b>. Am PC kannst du die Scans exportieren und die Simulation testen.'
       : 'Die Seite muss über <b>https://</b> geladen werden, sonst ist WebXR gesperrt (siehe README).';
   }
+  $('#version').textContent = versionText();
   renderModes();
   try { $('#color').checked = localStorage.getItem('quest-scanner-color') === '1'; } catch { /* ignore */ }
   $('#color').addEventListener('change', storeColorPref);

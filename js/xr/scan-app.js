@@ -5,6 +5,7 @@ import { FusionClient } from '../fusion/client.js';
 import { Panel, makeLabel } from './panel.js';
 import { evaluateMeasurement, describeMeasurement, robustPivotCalibration } from '../measure.js';
 import { saveModel } from './color-camera.js';
+import { versionText } from '../version.js';
 
 // Projects the live camera image onto the preview (to align the color camera).
 const PROJ_VS = `
@@ -491,6 +492,7 @@ export class ScanApp {
       title = 'Mehr';
       lines.push(...this._statusLines());
       if (this.diagLines) lines.push(...this.diagLines());
+      lines.push('Version: ' + versionText());
       if (this.mode.id === 'room') lines.push(`Quest-Raum: ${this.sceneMeshes.size} Meshes, ${this.planes.size} Flächen`);
       b.push({ id: 'preview', label: this.preview ? 'Vorschau: an' : 'Vorschau: aus', active: this.preview });
       if (this.colorCam) b.push({ id: 'colorcal', label: this.colorCal ? 'Ausrichten fertig' : 'Farbe ausrichten', active: this.colorCal });

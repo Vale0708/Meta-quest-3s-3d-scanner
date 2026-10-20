@@ -59,3 +59,4 @@ th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #2a3240; }
 .colorbox .big { font-weight: 600; }
 .colorbox .row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
 .campreview { width: 100%; max-width: 360px; border-radius: 8px; margin-top: 8px; background: #000; }
+.version { margin: 8px 0 0; color: var(--muted); font-size: 13px; }
